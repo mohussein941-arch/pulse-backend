@@ -9,6 +9,7 @@ const oauthRouter              = require("./routes/oauth");
 const authRouter               = require("./routes/auth");
 const surveysRouter            = require("./routes/surveys");
 const surveyRespondRouter      = require("./routes/survey-respond");
+const emailAuthRouter          = require("./routes/emailAuth");
 const { requireApiKey, requireUser } = require("./middleware/auth");
 
 const app  = express();
@@ -43,6 +44,7 @@ app.get("/health", (req, res) => {
 app.use("/auth",    authRouter);
 app.use("/oauth",   oauthRouter);
 app.use("/survey",  surveyRespondRouter);   // customers submit here — no auth
+app.use("/api/email", emailAuthRouter);     // email OAuth callbacks must be public
 
 // ── Protected API routes ──────────────────────────────────────────────────────
 app.use("/api", requireApiKey, requireUser);
