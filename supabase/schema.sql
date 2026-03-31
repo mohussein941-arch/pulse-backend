@@ -197,3 +197,46 @@ create index if not exists idx_milestones_user     on milestones(user_id, accoun
 create index if not exists idx_stakeholders_user   on stakeholders(user_id, account_id);
 create index if not exists idx_integrations_user   on integrations(user_id, connector_id);
 create index if not exists idx_sync_log_user       on sync_log(user_id, connector_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SURVEYS — added in Phase: Survey Management
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- ── Surveys table ─────────────────────────────────────────────────────────────
+create table if not exists surveys (
+  id               uuid primary key default gen_random_uuid(),
+  user_id          uuid not null references auth.users(id) on delete cascade,
+  account_id       uuid references accounts(id) on delete set null,
+  account_name     text not null,
+  type             text not null,        -- 'NPS' | 'CES' | 'CSAT'
+  custom_question  text,
+  token            text not null unique default encode(gen_random_bytes(16), 'hex'),
+  status           text default 'active', -- 'active' | 'closed'
+  deadline         date,
+  created_at       timestamptz default now()
+);
+
+-- ── Survey responses ──────────────────────────────────────────────────────────
+create table if not exists survey_responses (
+  id                uuid primary key default gen_random_uuid(),
+  survey_id         uuid not null references surveys(id) on delete cascade,
+  user_id           uuid not null references auth.users(id) on delete cascade,
+  score             integer not null,
+  custom_answer     text,
+  respondent_name   text,
+  respondent_email  text,
+  submitted_at      timestamptz default now()
+);
+
+-- ── RLS ───────────────────────────────────────────────────────────────────────
+alter table surveys          enable row level security;
+alter table survey_responses enable row level security;
+
+create policy "surveys_own"   on surveys          using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "responses_own" on survey_responses using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- ── Indexes ───────────────────────────────────────────────────────────────────
+create index if not exists idx_surveys_user      on surveys(user_id);
+create index if not exists idx_surveys_token     on surveys(token);
+create index if not exists idx_responses_survey  on survey_responses(survey_id);
+create index if not exists idx_responses_user    on survey_responses(user_id);
