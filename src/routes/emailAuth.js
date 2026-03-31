@@ -9,7 +9,7 @@ const { createClient } = require('@supabase/supabase-js');
 // ─── Supabase (service role for token storage) ───────────────────────────────
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_KEY
 );
 
 // ─── Google OAuth2 Client ────────────────────────────────────────────────────
