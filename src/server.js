@@ -14,6 +14,9 @@ const { requireApiKey, requireUser } = require("./middleware/auth");
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
+// Trust Railway's proxy — required for rate limiting to work correctly
+app.set("trust proxy", 1);
+
 // ── CORS ──────────────────────────────────────────────────────────────────────
 app.use(cors({
   origin: [
