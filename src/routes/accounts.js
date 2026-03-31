@@ -19,7 +19,7 @@ router.get("/", async (req, res, next) => {
       .select(`
         *,
         ces_history ( value, recorded_at ),
-        stakeholders ( id, name, title, role, sentiment, last_touch ),
+        stakeholders ( id, name, title, email, role, sentiment, last_touch ),
         activity_log ( id, type, note, logged_at ),
         milestones   ( id, text, done, sort_order )
       `)
@@ -58,6 +58,7 @@ router.get("/", async (req, res, next) => {
         id:        s.id,
         name:      s.name,
         title:     s.title || "",
+        email:     s.email || "",
         role:      s.role || "Neutral",
         sentiment: s.sentiment || "Neutral",
         lastTouch: s.last_touch || "",
@@ -210,6 +211,7 @@ router.patch("/:id", async (req, res, next) => {
           body.stakeholders.map(s => ({
             user_id: req.userId, account_id: id,
             name: s.name, title: s.title || "",
+            email: s.email || null,
             role: s.role || "Neutral", sentiment: s.sentiment || "Neutral",
             last_touch: s.lastTouch || null,
           }))
