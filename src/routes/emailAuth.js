@@ -108,7 +108,7 @@ router.get('/gmail/callback', async (req, res) => {
 
 res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?connected=gmail&email=${encodeURIComponent(profile.email)}`);  } catch (err) {
     console.error('Gmail callback error:', err);
-    res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=gmail_failed`);
+    res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=${encodeURIComponent(err.message)}`);
   }
 });
 
