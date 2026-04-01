@@ -103,8 +103,7 @@ router.get('/gmail/callback', async (req, res) => {
 
     if (dbError) throw dbError;
 
-    res.redirect(`${process.env.FRONTEND_URL}/settings/email?connected=gmail&email=${encodeURIComponent(profile.email)}`);
-  } catch (err) {
+res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?connected=gmail&email=${encodeURIComponent(profile.email)}`);  } catch (err) {
     console.error('Gmail callback error:', err);
     res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=gmail_failed`);
   }
