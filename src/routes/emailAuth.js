@@ -16,7 +16,7 @@ const supabase = createClient(
 const getGoogleOAuthClient = () =>
   new google.auth.OAuth2(
     '1085556759063-c67d734omncufsquhrjo9tg8bgmqbmgo.apps.googleusercontent.com',
-    process.env.GOOGLE_CLIENT_SECRET,
+    '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',
     'https://pulse-backend-production-485a.up.railway.app/api/email/gmail/callback'
   );
 
