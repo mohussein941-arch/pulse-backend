@@ -102,6 +102,8 @@ router.get('/gmail/callback', async (req, res) => {
         ignoreDuplicates: false,
       });
 
+      console.log('DB Error:', dbError);
+      console.log('userId:', userId);
     if (dbError) throw dbError;
 
 res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?connected=gmail&email=${encodeURIComponent(profile.email)}`);  } catch (err) {
