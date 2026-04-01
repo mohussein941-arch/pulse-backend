@@ -53,12 +53,13 @@ const requireAuth = async (req, res, next) => {
 // Returns the Google OAuth URL; frontend opens it in a popup
 router.get('/gmail/auth', (req, res) => {
   console.log('GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID);
+  const userId = req.headers['x-user-id'] || 'unknown';
   const oauth2Client = getGoogleOAuthClient();
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: GMAIL_SCOPES,
-    prompt: 'consent',                         // force refresh_token every time
-    state: 'user',                        // carry user_id through the flow
+    prompt: 'consent',
+    state: userId,
   });
   res.json({ url });
 });
