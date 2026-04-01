@@ -52,6 +52,7 @@ const requireAuth = async (req, res, next) => {
 // GET /api/email/gmail/auth
 // Returns the Google OAuth URL; frontend opens it in a popup
 router.get('/gmail/auth', (req, res) => {
+  console.log('GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID);
   const oauth2Client = getGoogleOAuthClient();
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
