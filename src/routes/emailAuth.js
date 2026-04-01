@@ -69,7 +69,7 @@ router.get('/gmail/callback', async (req, res) => {
   const { code, state: userId, error } = req.query;
 
   if (error) {
-    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=access_denied`);
+    return res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=access_denied`);
   }
 
   try {
@@ -105,7 +105,7 @@ router.get('/gmail/callback', async (req, res) => {
 
 res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?connected=gmail&email=${encodeURIComponent(profile.email)}`);  } catch (err) {
     console.error('Gmail callback error:', err);
-    res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=gmail_failed`);
+    res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=gmail_failed`);
   }
 });
 
@@ -132,7 +132,7 @@ router.get('/outlook/callback', async (req, res) => {
   const { code, state: userId, error } = req.query;
 
   if (error) {
-    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=access_denied`);
+    return res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=access_denied`);
   }
 
   try {
@@ -177,10 +177,10 @@ router.get('/outlook/callback', async (req, res) => {
         ignoreDuplicates: false,
       });
 
-    res.redirect(`${process.env.FRONTEND_URL}/settings/email?connected=outlook&email=${encodeURIComponent(email)}`);
+    res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?connected=outlook&email=${encodeURIComponent(email)}`);
   } catch (err) {
     console.error('Outlook callback error:', err);
-    res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=outlook_failed`);
+    res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=outlook_failed`);
   }
 });
 
