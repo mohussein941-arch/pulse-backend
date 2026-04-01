@@ -15,7 +15,7 @@ const supabase = createClient(
 // ─── Google OAuth2 Client ────────────────────────────────────────────────────
 const getGoogleOAuthClient = () =>
   new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
+    1085556759063-c67d734omncufsquhrjo9tg8bgmqbmgo.apps.googleusercontent.com,
     process.env.GOOGLE_CLIENT_SECRET,
     `${process.env.API_BASE_URL}/api/email/gmail/callback`
   );
