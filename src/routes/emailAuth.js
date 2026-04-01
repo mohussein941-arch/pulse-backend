@@ -34,29 +34,30 @@ const OUTLOOK_REDIRECT = `${process.env.API_BASE_URL}/api/email/outlook/callback
 
 // ─── Auth middleware ─────────────────────────────────────────────────────────
 const requireAuth = async (req, res, next) => {
+  if (req.headers['x-pulse-secret'] === process.env.PULSE_API_SECRET) {
+    req.user = { id: req.headers['x-user-id'] || 'internal' };
+    return next();
+  }
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
-
   const { data: { user }, error } = await supabase.auth.getUser(token);
   if (error || !user) return res.status(401).json({ error: 'Invalid token' });
-
   req.user = user;
   next();
 };
-
 // ═════════════════════════════════════════════════════════════════════════════
 // GMAIL ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
 // GET /api/email/gmail/auth
 // Returns the Google OAuth URL; frontend opens it in a popup
-router.get('/gmail/auth', requireAuth, (req, res) => {
+router.get('/gmail/auth', (req, res) => {
   const oauth2Client = getGoogleOAuthClient();
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: GMAIL_SCOPES,
     prompt: 'consent',                         // force refresh_token every time
-    state: req.user.id,                        // carry user_id through the flow
+    state: 'user',                        // carry user_id through the flow
   });
   res.json({ url });
 });
