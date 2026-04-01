@@ -17,7 +17,7 @@ const getGoogleOAuthClient = () =>
   new google.auth.OAuth2(
     '1085556759063-c67d734omncufsquhrjo9tg8bgmqbmgo.apps.googleusercontent.com',
     process.env.GOOGLE_CLIENT_SECRET,
-    `${process.env.API_BASE_URL}/api/email/gmail/callback`
+    'https://pulse-backend-production-485a.up.railway.app/api/email/gmail/callback'
   );
 
 const GMAIL_SCOPES = [
