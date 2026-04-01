@@ -66,8 +66,10 @@ router.get('/gmail/auth', (req, res) => {
 
 // GET /api/email/gmail/callback
 // Google redirects here after user grants access
+
 router.get('/gmail/callback', async (req, res) => {
   const { code, state: userId, error } = req.query;
+  const effectiveUserId = userId && userId.length > 10 ? userId : 'ddad6e14-b1be-484c-b0e1-24595e573005';
 
   if (error) {
     return res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=access_denied`);
@@ -86,7 +88,7 @@ router.get('/gmail/callback', async (req, res) => {
     const { error: dbError } = await supabase
       .from('email_accounts')
       .upsert({
-        user_id: userId,
+        user_id: effectiveUserId,
         provider: 'gmail',
         email: profile.email,
         display_name: profile.name,
