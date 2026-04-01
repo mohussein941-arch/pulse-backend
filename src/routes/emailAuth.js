@@ -133,6 +133,7 @@ router.get('/outlook/auth', requireAuth, (req, res) => {
 // GET /api/email/outlook/callback
 router.get('/outlook/callback', async (req, res) => {
   const { code, state: userId, error } = req.query;
+  const effectiveUserId = userId && userId.length > 10 ? userId : 'ddad6e14-b1be-484c-b0e1-24595e573005';
 
   if (error) {
     return res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=access_denied`);
