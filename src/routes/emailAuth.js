@@ -67,8 +67,13 @@ router.get('/gmail/auth', (req, res) => {
 // GET /api/email/gmail/callback
 // Google redirects here after user grants access
 
+const processedCodes = new Set();
 router.get('/gmail/callback', async (req, res) => {
   const { code, state: userId, error } = req.query;
+  if (!code || processedCodes.has(code)) {
+    return res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=duplicate`);
+  }
+  processedCodes.add(code);
   const effectiveUserId = userId && userId.length > 10 ? userId : 'ddad6e14-b1be-484c-b0e1-24595e573005';
 
   if (error) {
