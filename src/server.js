@@ -10,6 +10,7 @@ const authRouter               = require("./routes/auth");
 const surveysRouter            = require("./routes/surveys");
 const surveyRespondRouter      = require("./routes/survey-respond");
 const emailAuthRouter          = require("./routes/emailAuth");
+const whatsappRouter           = require("./routes/whatsapp");
 const { requireApiKey, requireUser } = require("./middleware/auth");
 
 const app  = express();
@@ -44,7 +45,8 @@ app.get("/health", (req, res) => {
 app.use("/auth",    authRouter);
 app.use("/oauth",   oauthRouter);
 app.use("/survey",  surveyRespondRouter);   // customers submit here — no auth
-app.use("/api/email", emailAuthRouter);     // email OAuth callbacks must be public
+app.use("/api/email",     emailAuthRouter);  // email OAuth callbacks must be public
+app.use("/api/whatsapp", whatsappRouter);   // webhook must be public — Meta sends here
 
 // ── Protected API routes ──────────────────────────────────────────────────────
 app.use("/api", requireApiKey, requireUser);

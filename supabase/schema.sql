@@ -240,3 +240,29 @@ create index if not exists idx_surveys_user      on surveys(user_id);
 create index if not exists idx_surveys_token     on surveys(token);
 create index if not exists idx_responses_survey  on survey_responses(survey_id);
 create index if not exists idx_responses_user    on survey_responses(user_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- WHATSAPP — survey delivery via WhatsApp conversation
+-- ─────────────────────────────────────────────────────────────────────────────
+
+create table if not exists whatsapp_sessions (
+  id          uuid primary key default gen_random_uuid(),
+  survey_id   uuid not null references surveys(id) on delete cascade,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  phone       text not null,
+  state       text not null default 'awaiting_score', -- awaiting_score | awaiting_comment | completed
+  score       integer,
+  comment     text,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now()
+);
+
+alter table whatsapp_sessions enable row level security;
+create policy "wa_sessions_own" on whatsapp_sessions using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create index if not exists idx_wa_sessions_phone  on whatsapp_sessions(phone);
+create index if not exists idx_wa_sessions_survey on whatsapp_sessions(survey_id);
+
+create or replace trigger wa_sessions_updated_at
+  before update on whatsapp_sessions
+  for each row execute function update_updated_at();
