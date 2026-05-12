@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
+const { requireApiKey, requireUser } = require('../middleware/auth');
 
 // ─── Supabase (service role for token storage) ───────────────────────────────
 const supabase = createClient(
@@ -15,9 +16,9 @@ const supabase = createClient(
 // ─── Google OAuth2 Client ────────────────────────────────────────────────────
 const getGoogleOAuthClient = () =>
   new google.auth.OAuth2(
-    '1085556759063-c67d734omncufsquhrjo9tg8bgmqbmgo.apps.googleusercontent.com',
-    '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',
-    'https://pulse-backend-production-485a.up.railway.app/api/email/gmail/callback'
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI
   );
 
 const GMAIL_SCOPES = [
@@ -32,53 +33,42 @@ const OUTLOOK_TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/
 const OUTLOOK_SCOPES = 'https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read offline_access';
 const OUTLOOK_REDIRECT = `${process.env.API_BASE_URL}/api/email/outlook/callback`;
 
-// ─── Auth middleware ─────────────────────────────────────────────────────────
-const requireAuth = async (req, res, next) => {
-  if (req.headers['x-pulse-secret'] === process.env.PULSE_API_SECRET) {
-    req.user = { id: req.headers['x-user-id'] || 'internal' };
-    return next();
-  }
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) return res.status(401).json({ error: 'Unauthorized' });
-  const { data: { user }, error } = await supabase.auth.getUser(token);
-  if (error || !user) return res.status(401).json({ error: 'Invalid token' });
-  req.user = user;
-  next();
-};
 // ═════════════════════════════════════════════════════════════════════════════
 // GMAIL ROUTES
 // ═════════════════════════════════════════════════════════════════════════════
 
 // GET /api/email/gmail/auth
 // Returns the Google OAuth URL; frontend opens it in a popup
-router.get('/gmail/auth', (req, res) => {
-  console.log('GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID);
-  const userId = req.headers['x-user-id'] || 'unknown';
+router.get('/gmail/auth', requireApiKey, requireUser, (req, res) => {
   const oauth2Client = getGoogleOAuthClient();
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: GMAIL_SCOPES,
     prompt: 'consent',
-    state: userId,
+    state: req.userId,
   });
   res.json({ url });
 });
 
 // GET /api/email/gmail/callback
-// Google redirects here after user grants access
-
+// Google redirects here after user grants access — must stay public
 const processedCodes = new Set();
 router.get('/gmail/callback', async (req, res) => {
   const { code, state: userId, error } = req.query;
-  if (!code || processedCodes.has(code)) {
-    return res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=duplicate`);
-  }
-  processedCodes.add(code);
-  const effectiveUserId = userId && userId.length > 10 ? userId : 'ddad6e14-b1be-484c-b0e1-24595e573005';
 
   if (error) {
-    return res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=access_denied`);
+    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=access_denied`);
   }
+
+  if (!code || processedCodes.has(code)) {
+    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=duplicate`);
+  }
+
+  if (!userId || userId.length < 10) {
+    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=missing_user`);
+  }
+
+  processedCodes.add(code);
 
   try {
     const oauth2Client = getGoogleOAuthClient();
@@ -93,7 +83,7 @@ router.get('/gmail/callback', async (req, res) => {
     const { error: dbError } = await supabase
       .from('email_accounts')
       .upsert({
-        user_id: effectiveUserId,
+        user_id: userId,
         provider: 'gmail',
         email: profile.email,
         display_name: profile.name,
@@ -109,13 +99,12 @@ router.get('/gmail/callback', async (req, res) => {
         ignoreDuplicates: false,
       });
 
-      console.log('DB Error:', dbError);
-      console.log('userId:', userId);
     if (dbError) throw dbError;
 
-res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?connected=gmail&email=${encodeURIComponent(profile.email)}`);  } catch (err) {
+    res.redirect(`${process.env.FRONTEND_URL}/settings/email?connected=gmail&email=${encodeURIComponent(profile.email)}`);
+  } catch (err) {
     console.error('Gmail callback error:', err);
-    res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=${encodeURIComponent(err.message)}`);
+    res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=${encodeURIComponent(err.message)}`);
   }
 });
 
@@ -124,30 +113,32 @@ res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?connected=gmail&
 // ═════════════════════════════════════════════════════════════════════════════
 
 // GET /api/email/outlook/auth
-router.get('/outlook/auth', requireAuth, (req, res) => {
+router.get('/outlook/auth', requireApiKey, requireUser, (req, res) => {
   const params = new URLSearchParams({
     client_id: process.env.MICROSOFT_CLIENT_ID,
     response_type: 'code',
     redirect_uri: OUTLOOK_REDIRECT,
     scope: OUTLOOK_SCOPES,
     response_mode: 'query',
-    state: req.user.id,
+    state: req.userId,
     prompt: 'consent',
   });
   res.json({ url: `${OUTLOOK_AUTH_URL}?${params}` });
 });
 
-// GET /api/email/outlook/callback
+// GET /api/email/outlook/callback — must stay public
 router.get('/outlook/callback', async (req, res) => {
   const { code, state: userId, error } = req.query;
-  const effectiveUserId = userId && userId.length > 10 ? userId : 'ddad6e14-b1be-484c-b0e1-24595e573005';
 
   if (error) {
-    return res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=access_denied`);
+    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=access_denied`);
+  }
+
+  if (!userId || userId.length < 10) {
+    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=missing_user`);
   }
 
   try {
-    // Exchange code for tokens
     const tokenRes = await fetch(OUTLOOK_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -162,7 +153,6 @@ router.get('/outlook/callback', async (req, res) => {
     const tokens = await tokenRes.json();
     if (tokens.error) throw new Error(tokens.error_description);
 
-    // Fetch user profile from Microsoft Graph
     const profileRes = await fetch('https://graph.microsoft.com/v1.0/me', {
       headers: { Authorization: `Bearer ${tokens.access_token}` },
     });
@@ -171,7 +161,7 @@ router.get('/outlook/callback', async (req, res) => {
     const email = profile.mail || profile.userPrincipalName;
     const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
 
-    await supabase
+    const { error: dbError } = await supabase
       .from('email_accounts')
       .upsert({
         user_id: userId,
@@ -188,10 +178,12 @@ router.get('/outlook/callback', async (req, res) => {
         ignoreDuplicates: false,
       });
 
-    res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?connected=outlook&email=${encodeURIComponent(email)}`);
+    if (dbError) throw dbError;
+
+    res.redirect(`${process.env.FRONTEND_URL}/settings/email?connected=outlook&email=${encodeURIComponent(email)}`);
   } catch (err) {
     console.error('Outlook callback error:', err);
-    res.redirect(`https://pulse-sigma-two.vercel.app/settings/email?error=outlook_failed`);
+    res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=outlook_failed`);
   }
 });
 
@@ -200,11 +192,11 @@ router.get('/outlook/callback', async (req, res) => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 // GET /api/email/accounts
-router.get('/accounts', async (req, res) => {
-const userId = req.headers['x-user-id'] || 'ddad6e14-b1be-484c-b0e1-24595e573005';
-const { data, error } = await supabase    .from('email_accounts')
+router.get('/accounts', requireApiKey, requireUser, async (req, res) => {
+  const { data, error } = await supabase
+    .from('email_accounts')
     .select('id, provider, email, display_name, is_primary, created_at')
-    .eq('user_id', userId)
+    .eq('user_id', req.userId)
     .order('created_at', { ascending: true });
 
   if (error) return res.status(500).json({ error: error.message });
@@ -212,32 +204,31 @@ const { data, error } = await supabase    .from('email_accounts')
 });
 
 // PATCH /api/email/accounts/:id/set-primary
-router.patch('/accounts/:id/set-primary', requireAuth, async (req, res) => {
+router.patch('/accounts/:id/set-primary', requireApiKey, requireUser, async (req, res) => {
   const { id } = req.params;
 
-  // Unset all primaries first
   await supabase
     .from('email_accounts')
     .update({ is_primary: false })
-    .eq('user_id', req.user.id);
+    .eq('user_id', req.userId);
 
   const { error } = await supabase
     .from('email_accounts')
     .update({ is_primary: true })
     .eq('id', id)
-    .eq('user_id', req.user.id);
+    .eq('user_id', req.userId);
 
   if (error) return res.status(500).json({ error: error.message });
   res.json({ success: true });
 });
 
 // DELETE /api/email/accounts/:id
-router.delete('/accounts/:id', requireAuth, async (req, res) => {
+router.delete('/accounts/:id', requireApiKey, requireUser, async (req, res) => {
   const { error } = await supabase
     .from('email_accounts')
     .delete()
     .eq('id', req.params.id)
-    .eq('user_id', req.user.id);
+    .eq('user_id', req.userId);
 
   if (error) return res.status(500).json({ error: error.message });
   res.json({ success: true });
@@ -249,19 +240,18 @@ router.delete('/accounts/:id', requireAuth, async (req, res) => {
 
 // POST /api/email/send
 // Body: { accountId, to: [emails], subject, htmlBody, surveyId? }
-router.post('/send', async (req, res) => {
-    const { accountId, to, subject, htmlBody, surveyId } = req.body;
+router.post('/send', requireApiKey, requireUser, async (req, res) => {
+  const { accountId, to, subject, htmlBody, surveyId } = req.body;
 
   if (!accountId || !to?.length || !subject || !htmlBody) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  // Fetch account with tokens
   const { data: account, error: fetchErr } = await supabase
     .from('email_accounts')
     .select('*')
     .eq('id', accountId)
-    .eq('user_id', req.headers['x-user-id'] || 'ddad6e14-b1be-484c-b0e1-24595e573005')
+    .eq('user_id', req.userId)
     .single();
 
   if (fetchErr || !account) {
@@ -269,7 +259,6 @@ router.post('/send', async (req, res) => {
   }
 
   try {
-    // Refresh token if expired
     const freshAccount = await refreshTokenIfNeeded(account);
 
     const results = [];
@@ -282,7 +271,6 @@ router.post('/send', async (req, res) => {
         }
         results.push({ email: recipient, status: 'sent' });
 
-        // Log to survey_email_sends if surveyId provided
         if (surveyId) {
           await supabase.from('survey_email_sends').insert({
             survey_id: surveyId,
@@ -325,8 +313,6 @@ async function sendViaGmail(account, to, subject, htmlBody) {
   });
 
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-  // RFC 2822 raw message
   const raw = makeRawEmail(account.email, account.display_name, to, subject, htmlBody);
 
   await gmail.users.messages.send({
@@ -372,7 +358,6 @@ async function refreshTokenIfNeeded(account) {
     ? new Date(account.token_expires_at).getTime()
     : null;
 
-  // Refresh if within 5 minutes of expiry
   if (!expiresAt || expiresAt - now > 5 * 60 * 1000) return account;
 
   if (account.provider === 'gmail') {
@@ -404,11 +389,11 @@ async function refreshTokenIfNeeded(account) {
     const tokens = await tokenRes.json();
     if (tokens.error) throw new Error('Failed to refresh Outlook token');
 
-    const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+    const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
     await supabase.from('email_accounts').update({
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token || account.refresh_token,
-      token_expires_at: expiresAt,
+      token_expires_at: newExpiresAt,
     }).eq('id', account.id);
 
     return { ...account, access_token: tokens.access_token };
