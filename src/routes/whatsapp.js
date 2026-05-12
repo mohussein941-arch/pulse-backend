@@ -84,6 +84,26 @@ async function handleConversation(session, from, text) {
         note:       `WhatsApp ${survey.type} response: ${session.score}${comment ? ` — "${comment}"` : ''}`,
         logged_at:  new Date().toISOString().split('T')[0],
       });
+
+      // Update account health fields so the score reflects immediately
+      if (survey.type === 'NPS') {
+        // NPS is 0–10, stored on accounts as 0–100
+        await supabase.from('accounts')
+          .update({ nps: session.score * 10 })
+          .eq('id', survey.account_id);
+      } else if (survey.type === 'CES') {
+        // CES is 1–7, stored on accounts as 1–5 scale
+        const normalized = Math.round((session.score / 7) * 5 * 10) / 10;
+        await supabase.from('accounts')
+          .update({ ces: normalized })
+          .eq('id', survey.account_id);
+        await supabase.from('ces_history').insert({
+          user_id:    session.user_id,
+          account_id: survey.account_id,
+          value:      normalized,
+          recorded_at: new Date().toISOString().split('T')[0],
+        });
+      }
     }
 
     await supabase.from('whatsapp_sessions')
