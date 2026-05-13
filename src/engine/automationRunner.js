@@ -187,6 +187,21 @@ async function firedRecently(ruleId, accountId, hours) {
   return !!data;
 }
 
+// ─── Scope filter — account_id wins over segment_config ──────────────────────
+function scopeFilter(accounts, rule) {
+  if (rule.account_id) {
+    return accounts.filter(a => a.id === rule.account_id);
+  }
+  const seg = rule.segment_config || {};
+  if (!seg.plan && !seg.stage && !seg.arr_min) return accounts;
+  return accounts.filter(a => {
+    if (seg.plan    && a.plan  !== seg.plan)          return false;
+    if (seg.stage   && a.stage !== seg.stage)         return false;
+    if (seg.arr_min && (a.arr ?? 0) < seg.arr_min)    return false;
+    return true;
+  });
+}
+
 // ─── Main runner ──────────────────────────────────────────────────────────────
 async function runAutomationEngine() {
   try {
@@ -207,7 +222,7 @@ async function runAutomationEngine() {
       // Fetch accounts for this user
       const { data: accounts } = await supabase
         .from('accounts')
-        .select('id, name, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, archived, created_at')
+        .select('id, name, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, archived, created_at')
         .eq('user_id', userId)
         .eq('archived', false);
 
@@ -256,8 +271,9 @@ async function runAutomationEngine() {
       const ctx = { recentResponses, profile };
 
       for (const rule of userRules) {
-        const cooldown = cooldownHours(rule.trigger_type);
-        for (const account of accounts) {
+        const cooldown      = cooldownHours(rule.trigger_type);
+        const targetAccounts = scopeFilter(accounts, rule);
+        for (const account of targetAccounts) {
           if (await firedRecently(rule.id, account.id, cooldown)) continue;
           if (!triggered(rule, account, ctx)) continue;
 

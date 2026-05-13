@@ -23,13 +23,20 @@ router.get('/rules', async (req, res) => {
 
 // POST /api/automation/rules
 router.post('/rules', async (req, res) => {
-  const { name, trigger_type, trigger_config, action_type, action_config } = req.body;
+  const { name, trigger_type, trigger_config, action_type, action_config, account_id, segment_config } = req.body;
   if (!name || !trigger_type || !action_type) {
     return res.status(400).json({ error: 'name, trigger_type and action_type are required' });
   }
   const { data, error } = await supabase
     .from('automation_rules')
-    .insert({ user_id: req.userId, name, trigger_type, trigger_config: trigger_config || {}, action_type, action_config: action_config || {} })
+    .insert({
+      user_id: req.userId, name, trigger_type,
+      trigger_config:  trigger_config  || {},
+      action_type,
+      action_config:   action_config   || {},
+      account_id:      account_id      || null,
+      segment_config:  segment_config  || {},
+    })
     .select()
     .single();
   if (error) return res.status(500).json({ error: error.message });
@@ -38,7 +45,7 @@ router.post('/rules', async (req, res) => {
 
 // PATCH /api/automation/rules/:id
 router.patch('/rules/:id', async (req, res) => {
-  const allowed = ['name', 'trigger_type', 'trigger_config', 'action_type', 'action_config', 'enabled'];
+  const allowed = ['name', 'trigger_type', 'trigger_config', 'action_type', 'action_config', 'enabled', 'account_id', 'segment_config'];
   const updates = {};
   for (const k of allowed) {
     if (req.body[k] !== undefined) updates[k] = req.body[k];
