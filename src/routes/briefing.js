@@ -14,7 +14,7 @@ router.get('/today', async (req, res, next) => {
 
     let { data: items } = await supabase
       .from('briefing_items')
-      .select('*')
+      .select('*, accounts(name)')
       .eq('user_id', req.userId)
       .eq('briefing_date', today)
       .order('current_score', { ascending: false });
@@ -31,7 +31,7 @@ router.get('/today', async (req, res, next) => {
         await generateBriefing(profile, today, profile.briefing_config || {});
         const { data: fresh } = await supabase
           .from('briefing_items')
-          .select('*')
+          .select('*, accounts(name)')
           .eq('user_id', req.userId)
           .eq('briefing_date', today)
           .order('current_score', { ascending: false });
@@ -62,7 +62,7 @@ router.get('/date/:date', async (req, res, next) => {
   try {
     const { data } = await supabase
       .from('briefing_items')
-      .select('*')
+      .select('*, accounts(name)')
       .eq('user_id', req.userId)
       .eq('briefing_date', req.params.date)
       .order('current_score', { ascending: false });
@@ -161,7 +161,7 @@ function shapeItem(i) {
     signalType:   i.signal_type,
     signalDetail: i.signal_detail,
     accountId:    i.account_id || null,
-    accountName:  i.account_name || null,
+    accountName:  i.accounts?.name || null,
     baseScore:    parseFloat(i.base_score),
     carryDays:    i.carry_days,
     currentScore: parseFloat(i.current_score),
