@@ -6,6 +6,9 @@ const router = express.Router();
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
 const { requireApiKey, requireUser } = require('../middleware/auth');
+const { encrypt, decrypt } = require('../utils/crypto');
+const { audit } = require('../middleware/audit');
+const { schemas, validate } = require('../utils/validate');
 
 // ─── Supabase (service role for token storage) ───────────────────────────────
 const supabase = createClient(
@@ -79,20 +82,20 @@ router.get('/gmail/callback', async (req, res) => {
     const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
     const { data: profile } = await oauth2.userinfo.get();
 
-    // Upsert into Supabase
+    // Upsert into Supabase — tokens encrypted at rest
     const { error: dbError } = await supabase
       .from('email_accounts')
       .upsert({
-        user_id: userId,
-        provider: 'gmail',
-        email: profile.email,
-        display_name: profile.name,
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token || null,
+        user_id:          userId,
+        provider:         'gmail',
+        email:            profile.email,
+        display_name:     profile.name,
+        access_token:     encrypt(tokens.access_token),
+        refresh_token:    tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
         token_expires_at: tokens.expiry_date
           ? new Date(tokens.expiry_date).toISOString()
           : null,
-        scope: tokens.scope,
+        scope:      tokens.scope,
         updated_at: new Date().toISOString(),
       }, {
         onConflict: 'user_id,email',
@@ -101,6 +104,7 @@ router.get('/gmail/callback', async (req, res) => {
 
     if (dbError) throw dbError;
 
+    audit(userId, 'email.token_stored', { meta: { provider: 'gmail' } });
     res.redirect(`${process.env.FRONTEND_URL}/settings/email?connected=gmail&email=${encodeURIComponent(profile.email)}`);
   } catch (err) {
     console.error('Gmail callback error:', err);
@@ -164,15 +168,15 @@ router.get('/outlook/callback', async (req, res) => {
     const { error: dbError } = await supabase
       .from('email_accounts')
       .upsert({
-        user_id: userId,
-        provider: 'outlook',
+        user_id:          userId,
+        provider:         'outlook',
         email,
-        display_name: profile.displayName,
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token || null,
+        display_name:     profile.displayName,
+        access_token:     encrypt(tokens.access_token),
+        refresh_token:    tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
         token_expires_at: expiresAt,
-        scope: tokens.scope,
-        updated_at: new Date().toISOString(),
+        scope:            tokens.scope,
+        updated_at:       new Date().toISOString(),
       }, {
         onConflict: 'user_id,email',
         ignoreDuplicates: false,
@@ -180,6 +184,7 @@ router.get('/outlook/callback', async (req, res) => {
 
     if (dbError) throw dbError;
 
+    audit(userId, 'email.token_stored', { meta: { provider: 'outlook' } });
     res.redirect(`${process.env.FRONTEND_URL}/settings/email?connected=outlook&email=${encodeURIComponent(email)}`);
   } catch (err) {
     console.error('Outlook callback error:', err);
@@ -240,7 +245,7 @@ router.delete('/accounts/:id', requireApiKey, requireUser, async (req, res) => {
 
 // POST /api/email/send
 // Body: { accountId, to: [emails], subject, htmlBody, surveyId? }
-router.post('/send', requireApiKey, requireUser, async (req, res) => {
+router.post('/send', requireApiKey, requireUser, validate(schemas.emailSend), async (req, res) => {
   const { accountId, to, subject, htmlBody, surveyId } = req.body;
 
   if (!accountId || !to?.length || !subject || !htmlBody) {
@@ -352,27 +357,35 @@ async function sendViaOutlook(account, to, subject, htmlBody) {
 }
 
 // ─── Token refresh ────────────────────────────────────────────────────────────
+// Returns account with plaintext tokens ready for API use.
 async function refreshTokenIfNeeded(account) {
-  const now = Date.now();
+  // Decrypt stored tokens into plaintext for this request
+  const plainAccess   = decrypt(account.access_token);
+  const plainRefresh  = decrypt(account.refresh_token);
+
+  const now       = Date.now();
   const expiresAt = account.token_expires_at
     ? new Date(account.token_expires_at).getTime()
     : null;
 
-  if (!expiresAt || expiresAt - now > 5 * 60 * 1000) return account;
+  // Token still valid — return decrypted copy without hitting the provider
+  if (!expiresAt || expiresAt - now > 5 * 60 * 1000) {
+    return { ...account, access_token: plainAccess, refresh_token: plainRefresh };
+  }
 
   if (account.provider === 'gmail') {
     const oauth2Client = getGoogleOAuthClient();
-    oauth2Client.setCredentials({ refresh_token: account.refresh_token });
+    oauth2Client.setCredentials({ refresh_token: plainRefresh });
     const { credentials } = await oauth2Client.refreshAccessToken();
 
     await supabase.from('email_accounts').update({
-      access_token: credentials.access_token,
+      access_token:     encrypt(credentials.access_token),
       token_expires_at: credentials.expiry_date
         ? new Date(credentials.expiry_date).toISOString()
         : null,
     }).eq('id', account.id);
 
-    return { ...account, access_token: credentials.access_token };
+    return { ...account, access_token: credentials.access_token, refresh_token: plainRefresh };
   }
 
   if (account.provider === 'outlook') {
@@ -380,26 +393,28 @@ async function refreshTokenIfNeeded(account) {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id: process.env.MICROSOFT_CLIENT_ID,
+        client_id:     process.env.MICROSOFT_CLIENT_ID,
         client_secret: process.env.MICROSOFT_CLIENT_SECRET,
-        refresh_token: account.refresh_token,
-        grant_type: 'refresh_token',
+        refresh_token: plainRefresh,
+        grant_type:    'refresh_token',
       }),
     });
     const tokens = await tokenRes.json();
     if (tokens.error) throw new Error('Failed to refresh Outlook token');
 
-    const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+    const newExpiresAt    = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+    const newRefreshToken = tokens.refresh_token || plainRefresh;
+
     await supabase.from('email_accounts').update({
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token || account.refresh_token,
+      access_token:     encrypt(tokens.access_token),
+      refresh_token:    encrypt(newRefreshToken),
       token_expires_at: newExpiresAt,
     }).eq('id', account.id);
 
-    return { ...account, access_token: tokens.access_token };
+    return { ...account, access_token: tokens.access_token, refresh_token: newRefreshToken };
   }
 
-  return account;
+  return { ...account, access_token: plainAccess, refresh_token: plainRefresh };
 }
 
 // ─── RFC 2822 email builder ───────────────────────────────────────────────────

@@ -4,6 +4,8 @@ const express  = require('express');
 const router   = express.Router();
 const supabase = require('../supabase');
 const { generateBriefing } = require('../engine/briefingRunner');
+const { schemas, validate, validateUuidParam } = require('../utils/validate');
+const { audit } = require('../middleware/audit');
 
 function todayStr() { return new Date().toISOString().split('T')[0]; }
 
@@ -72,12 +74,9 @@ router.get('/date/:date', async (req, res, next) => {
 });
 
 // PATCH /api/briefing/items/:id — mark done / snooze / dismiss
-router.patch('/items/:id', async (req, res, next) => {
+router.patch('/items/:id', validateUuidParam('id'), validate(schemas.briefingItemUpdate), async (req, res, next) => {
   try {
     const { status, snoozeDays } = req.body;
-    if (!['done','snoozed','dismissed','pending'].includes(status)) {
-      return res.status(400).json({ error: 'Invalid status' });
-    }
 
     const updates = {
       status,
@@ -99,6 +98,7 @@ router.patch('/items/:id', async (req, res, next) => {
 
     if (error) throw error;
     if (!data)  return res.status(404).json({ error: 'Item not found' });
+    audit(req.userId, 'briefing.item_updated', { resourceType: 'briefing_item', resourceId: req.params.id, meta: { status }, req });
     res.json(shapeItem(data));
   } catch (err) { next(err); }
 });
@@ -118,7 +118,7 @@ router.get('/settings', async (req, res, next) => {
 });
 
 // PATCH /api/briefing/settings
-router.patch('/settings', async (req, res, next) => {
+router.patch('/settings', validate(schemas.briefingSettings), async (req, res, next) => {
   try {
     const { enabled, days, hour, timezone, email_enabled } = req.body;
     const current = await getConfig(req.userId);

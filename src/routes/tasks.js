@@ -3,6 +3,8 @@
 const express  = require('express');
 const router   = express.Router();
 const supabase = require('../supabase');
+const { schemas, validate, validateUuidParam } = require('../utils/validate');
+const { audit } = require('../middleware/audit');
 
 // GET /api/tasks — all tasks for this user
 router.get('/', async (req, res, next) => {
@@ -19,30 +21,30 @@ router.get('/', async (req, res, next) => {
 });
 
 // POST /api/tasks
-router.post('/', async (req, res, next) => {
+router.post('/', validate(schemas.taskCreate), async (req, res, next) => {
   try {
     const { title, description, priority, dueDate, accountId } = req.body;
-    if (!title?.trim()) return res.status(400).json({ error: 'title required' });
 
     const { data, error } = await supabase
       .from('tasks')
       .insert({
-        user_id:    req.userId,
-        account_id: accountId || null,
-        title:      title.trim(),
+        user_id:     req.userId,
+        account_id:  accountId || null,
+        title,
         description: description || null,
-        priority:   priority || 'High',
-        due_date:   dueDate || null,
+        priority,
+        due_date:    dueDate || null,
       })
       .select().single();
 
     if (error) throw error;
+    audit(req.userId, 'task.created', { resourceType: 'task', resourceId: data.id, req });
     res.status(201).json(shape(data));
   } catch (err) { next(err); }
 });
 
 // PATCH /api/tasks/:id
-router.patch('/:id', async (req, res, next) => {
+router.patch('/:id', validateUuidParam('id'), validate(schemas.taskUpdate), async (req, res, next) => {
   try {
     const updates = {};
     if ('done'        in req.body) updates.done        = req.body.done;
@@ -60,12 +62,13 @@ router.patch('/:id', async (req, res, next) => {
 
     if (error) throw error;
     if (!data)  return res.status(404).json({ error: 'Task not found' });
+    audit(req.userId, 'task.updated', { resourceType: 'task', resourceId: req.params.id, req });
     res.json(shape(data));
   } catch (err) { next(err); }
 });
 
 // DELETE /api/tasks/:id
-router.delete('/:id', async (req, res, next) => {
+router.delete('/:id', validateUuidParam('id'), async (req, res, next) => {
   try {
     const { error } = await supabase
       .from('tasks')
@@ -74,6 +77,7 @@ router.delete('/:id', async (req, res, next) => {
       .eq('user_id', req.userId);
 
     if (error) throw error;
+    audit(req.userId, 'task.deleted', { resourceType: 'task', resourceId: req.params.id, req });
     res.status(204).send();
   } catch (err) { next(err); }
 });

@@ -6,6 +6,7 @@ const { createClient }       = require('@supabase/supabase-js');
 const { google }             = require('googleapis');
 const { scanAccountSignals, scanTaskSignals, scanWins, currentScore, THRESHOLD, todayStr } = require('./briefingSignals');
 const { buildBriefingEmail } = require('./briefingEmail');
+const { decrypt, encrypt }   = require('../utils/crypto');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
@@ -234,20 +235,27 @@ function getOAuthClient() {
 }
 
 async function refreshGmailToken(account) {
-  const now = Date.now();
+  // Decrypt stored tokens into plaintext for API use
+  const plainAccess  = decrypt(account.access_token);
+  const plainRefresh = decrypt(account.refresh_token);
+
+  const now     = Date.now();
   const expires = account.token_expires_at ? new Date(account.token_expires_at).getTime() : null;
-  if (expires && expires - now > 5 * 60_000) return account;
+
+  if (expires && expires - now > 5 * 60_000) {
+    return { ...account, access_token: plainAccess, refresh_token: plainRefresh };
+  }
 
   const oauth2Client = getOAuthClient();
-  oauth2Client.setCredentials({ refresh_token: account.refresh_token });
+  oauth2Client.setCredentials({ refresh_token: plainRefresh });
   const { credentials } = await oauth2Client.refreshAccessToken();
 
   await supabase.from('email_accounts').update({
-    access_token:    credentials.access_token,
+    access_token:     encrypt(credentials.access_token),
     token_expires_at: credentials.expiry_date ? new Date(credentials.expiry_date).toISOString() : null,
   }).eq('id', account.id);
 
-  return { ...account, access_token: credentials.access_token };
+  return { ...account, access_token: credentials.access_token, refresh_token: plainRefresh };
 }
 
 async function sendViaGmail(account, to, subject, htmlBody) {

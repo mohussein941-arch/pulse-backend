@@ -1,9 +1,31 @@
 require("dotenv").config();
 const express   = require("express");
 const cors      = require("cors");
+const helmet    = require("helmet");
 const rateLimit = require("express-rate-limit");
+const cron      = require("node-cron");
 
-const cron = require("node-cron");
+// ── Startup environment validation ────────────────────────────────────────────
+const REQUIRED_ENV = [
+  "SUPABASE_URL",
+  "SUPABASE_SERVICE_KEY",
+  "SUPABASE_ANON_KEY",
+  "PULSE_API_SECRET",
+  "ENCRYPTION_KEY",
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "GOOGLE_REDIRECT_URI",
+  "FRONTEND_URL",
+];
+const missing = REQUIRED_ENV.filter(k => !process.env[k]);
+if (missing.length) {
+  console.error(`\n[FATAL] Missing required environment variables:\n  ${missing.join("\n  ")}\n`);
+  process.exit(1);
+}
+if (process.env.ENCRYPTION_KEY.length !== 64) {
+  console.error("\n[FATAL] ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes).\n  Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"\n");
+  process.exit(1);
+}
 
 const accountsRouter           = require("./routes/accounts");
 const syncRouter               = require("./routes/sync");
@@ -29,6 +51,12 @@ const PORT = process.env.PORT || 3001;
 // Trust Railway's proxy — required for rate limiting to work correctly
 app.set("trust proxy", 1);
 
+// ── Security headers (helmet) ─────────────────────────────────────────────────
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }, // allow frontend fetches
+  contentSecurityPolicy: false, // API server — no HTML served
+}));
+
 // ── CORS ──────────────────────────────────────────────────────────────────────
 app.use(cors({
   origin: [
@@ -40,11 +68,26 @@ app.use(cors({
 
 app.use(express.json({ limit: "2mb" }));
 
+// Global rate limit
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { error: "Too many requests — please slow down." },
 }));
+
+// Per-user AI rate limit — applied to /api/ai/* when those routes are mounted
+const aiRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,   // 1 hour window
+  max: 30,                     // 30 AI calls per user per hour
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: req => req.userId || req.ip,
+  message: { error: "AI rate limit exceeded — max 30 calls per hour per user." },
+});
+// Exported so ai.js router can use it: app.use("/api/ai", aiRateLimit, aiRouter)
+app.set("aiRateLimit", aiRateLimit);
 
 // ── Health check (public) ─────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
