@@ -304,3 +304,74 @@ create policy "auto_log_own"   on automation_log   using (auth.uid() = user_id) 
 create index if not exists idx_auto_rules_user on automation_rules(user_id);
 create index if not exists idx_auto_log_user   on automation_log(user_id, fired_at desc);
 create index if not exists idx_auto_log_dedup  on automation_log(rule_id, account_id, fired_at desc);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- ONBOARDING — optional structured onboarding plans per account
+-- ─────────────────────────────────────────────────────────────────────────────
+
+create table if not exists onboarding_plans (
+  id             uuid primary key default gen_random_uuid(),
+  user_id        uuid not null references auth.users(id) on delete cascade,
+  account_id     uuid not null references accounts(id) on delete cascade,
+  status         text default 'active',          -- active | closed
+  current_phase  text default 'handover',        -- handover | kickoff | configuration | training | go_live | value_realized
+  phases         jsonb not null default '{}',    -- per-phase { expected, actual, skipped }
+  handover_data  jsonb not null default '{}',    -- { what_sold, why_bought, success_definition, promises, red_flags, contacts }
+  go_live_target date,
+  go_live_actual date,
+  created_at     timestamptz default now(),
+  updated_at     timestamptz default now()
+);
+
+-- Only one active plan per account per user
+create unique index if not exists idx_onboarding_plans_active
+  on onboarding_plans(user_id, account_id) where status = 'active';
+
+create table if not exists onboarding_tasks (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  account_id  uuid not null references accounts(id) on delete cascade,
+  plan_id     uuid not null references onboarding_plans(id) on delete cascade,
+  title       text not null,
+  description text,
+  owner       text not null default 'csm',         -- csm | customer
+  status      text not null default 'not_started', -- not_started | in_progress | done | blocked
+  due_date    date,
+  sort_order  integer default 0,
+  note        text,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now()
+);
+
+create table if not exists account_needs (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  account_id  uuid not null references accounts(id) on delete cascade,
+  category    text not null default 'business',  -- technical | business | integration | training
+  description text not null,
+  priority    text default 'medium',             -- high | medium | low
+  status      text default 'identified',         -- identified | in_progress | resolved
+  created_at  timestamptz default now()
+);
+
+alter table onboarding_plans enable row level security;
+alter table onboarding_tasks  enable row level security;
+alter table account_needs     enable row level security;
+
+create policy "ob_plans_own" on onboarding_plans using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "ob_tasks_own" on onboarding_tasks  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "needs_own"    on account_needs     using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create index if not exists idx_ob_plans_user    on onboarding_plans(user_id);
+create index if not exists idx_ob_plans_account on onboarding_plans(account_id);
+create index if not exists idx_ob_tasks_plan    on onboarding_tasks(plan_id);
+create index if not exists idx_ob_tasks_account on onboarding_tasks(account_id);
+create index if not exists idx_needs_account    on account_needs(account_id);
+
+create or replace trigger ob_plans_updated_at
+  before update on onboarding_plans
+  for each row execute function update_updated_at();
+
+create or replace trigger ob_tasks_updated_at
+  before update on onboarding_tasks
+  for each row execute function update_updated_at();

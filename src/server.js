@@ -14,6 +14,7 @@ const surveyRespondRouter      = require("./routes/survey-respond");
 const emailAuthRouter          = require("./routes/emailAuth");
 const whatsappRouter           = require("./routes/whatsapp");
 const automationRouter         = require("./routes/automation");
+const onboardingRouter         = require("./routes/onboarding");
 const { runAutomationEngine }  = require("./engine/automationRunner");
 const { requireApiKey, requireUser } = require("./middleware/auth");
 
@@ -57,7 +58,8 @@ app.use("/api", requireApiKey, requireUser);
 app.use("/api/accounts",   accountsRouter);
 app.use("/api/sync",       syncRouter);
 app.use("/api/surveys",    surveysRouter);
-app.use("/api/automation", automationRouter);
+app.use("/api/automation",  automationRouter);
+app.use("/api/onboarding", onboardingRouter);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
