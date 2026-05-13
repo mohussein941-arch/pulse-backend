@@ -11,6 +11,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
     "@supabase/supabase-js": "^2.39.0",
     "axios": "^1.6.0",
     "cors": "^2.8.5",
@@ -20,6 +21,7 @@
     "googleapis": "^171.4.0",
     "helmet": "^8.1.0",
     "node-cron": "^4.2.1",
+    "openai": "^6.37.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -41,6 +41,7 @@ const portalRouter             = require("./routes/portal");
 const portalManageRouter       = require("./routes/portalManage");
 const tasksRouter              = require("./routes/tasks");
 const briefingRouter           = require("./routes/briefing");
+const aiRouter                 = require("./routes/ai");
 const { runAutomationEngine }  = require("./engine/automationRunner");
 const { runBriefingEngine }    = require("./engine/briefingRunner");
 const { requireApiKey, requireUser } = require("./middleware/auth");
@@ -112,6 +113,7 @@ app.use("/api/onboarding", onboardingRouter);
 app.use("/api/portal",     portalManageRouter);
 app.use("/api/tasks",      tasksRouter);
 app.use("/api/briefing",   briefingRouter);
+app.use("/api/ai",         app.get("aiRateLimit"), aiRouter);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
