@@ -266,3 +266,41 @@ create index if not exists idx_wa_sessions_survey on whatsapp_sessions(survey_id
 create or replace trigger wa_sessions_updated_at
   before update on whatsapp_sessions
   for each row execute function update_updated_at();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- AUTOMATION — rules-based background task engine
+-- ─────────────────────────────────────────────────────────────────────────────
+
+create table if not exists automation_rules (
+  id             uuid primary key default gen_random_uuid(),
+  user_id        uuid not null references auth.users(id) on delete cascade,
+  name           text not null,
+  trigger_type   text not null,   -- health_below | no_contact_days | renewal_days | nps_below | ces_below | usage_below
+  trigger_config jsonb not null default '{}',  -- e.g. { "threshold": 40 } or { "days": 14 }
+  action_type    text not null,   -- log_activity | create_task
+  action_config  jsonb not null default '{}',  -- e.g. { "note": "Follow up needed" } or { "title": "Check in with account" }
+  enabled        boolean default true,
+  created_at     timestamptz default now()
+);
+
+create table if not exists automation_log (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  rule_id      uuid not null references automation_rules(id) on delete cascade,
+  account_id   uuid not null references accounts(id) on delete cascade,
+  account_name text,
+  rule_name    text,
+  action_type  text not null,
+  detail       text,
+  fired_at     timestamptz default now()
+);
+
+alter table automation_rules enable row level security;
+alter table automation_log   enable row level security;
+
+create policy "auto_rules_own" on automation_rules using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "auto_log_own"   on automation_log   using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create index if not exists idx_auto_rules_user on automation_rules(user_id);
+create index if not exists idx_auto_log_user   on automation_log(user_id, fired_at desc);
+create index if not exists idx_auto_log_dedup  on automation_log(rule_id, account_id, fired_at desc);

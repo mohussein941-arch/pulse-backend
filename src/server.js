@@ -3,6 +3,8 @@ const express   = require("express");
 const cors      = require("cors");
 const rateLimit = require("express-rate-limit");
 
+const cron = require("node-cron");
+
 const accountsRouter           = require("./routes/accounts");
 const syncRouter               = require("./routes/sync");
 const oauthRouter              = require("./routes/oauth");
@@ -11,6 +13,8 @@ const surveysRouter            = require("./routes/surveys");
 const surveyRespondRouter      = require("./routes/survey-respond");
 const emailAuthRouter          = require("./routes/emailAuth");
 const whatsappRouter           = require("./routes/whatsapp");
+const automationRouter         = require("./routes/automation");
+const { runAutomationEngine }  = require("./engine/automationRunner");
 const { requireApiKey, requireUser } = require("./middleware/auth");
 
 const app  = express();
@@ -50,9 +54,10 @@ app.use("/api/whatsapp", whatsappRouter);   // webhook must be public — Meta s
 
 // ── Protected API routes ──────────────────────────────────────────────────────
 app.use("/api", requireApiKey, requireUser);
-app.use("/api/accounts", accountsRouter);
-app.use("/api/sync",     syncRouter);
-app.use("/api/surveys",  surveysRouter);
+app.use("/api/accounts",   accountsRouter);
+app.use("/api/sync",       syncRouter);
+app.use("/api/surveys",    surveysRouter);
+app.use("/api/automation", automationRouter);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -69,6 +74,10 @@ app.listen(PORT, () => {
   console.log(`\n✓ Pulse backend running on port ${PORT}`);
   console.log(`  Health: http://localhost:${PORT}/health`);
   console.log(`  Mode:   ${process.env.NODE_ENV || "development"}\n`);
+
+  // Run automation engine every hour
+  cron.schedule("0 * * * *", runAutomationEngine);
+  console.log("  Automation engine scheduled (hourly)\n");
 });
 
 module.exports = app;
