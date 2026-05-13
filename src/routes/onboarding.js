@@ -3,6 +3,7 @@
 
 const express  = require('express');
 const router   = express.Router();
+const crypto   = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(
@@ -209,6 +210,33 @@ router.delete('/needs/:id', async (req, res) => {
     .eq('id', req.params.id).eq('user_id', req.userId);
   if (error) return res.status(500).json({ error: error.message });
   res.status(204).send();
+});
+
+// ─── Sales handover — generate magic link ─────────────────────────────────────
+router.post('/plan/:id/send-handover', async (req, res) => {
+  const { id } = req.params;
+  const { sales_email } = req.body;
+  if (!sales_email) return res.status(400).json({ error: 'sales_email is required' });
+
+  // Verify ownership
+  const { data: plan, error: planErr } = await supabase
+    .from('onboarding_plans').select('id, user_id, handover_token, handover_data, account_id')
+    .eq('id', id).eq('user_id', req.userId).single();
+  if (planErr || !plan) return res.status(404).json({ error: 'Plan not found' });
+
+  const token = plan.handover_token || crypto.randomBytes(24).toString('hex');
+
+  const { error } = await supabase.from('onboarding_plans').update({
+    handover_token:      token,
+    handover_sales_email: sales_email,
+    handover_status:     'sent',
+    handover_sent_at:    new Date().toISOString(),
+  }).eq('id', id).eq('user_id', req.userId);
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const link = `${process.env.FRONTEND_URL}/handover/${token}`;
+  res.json({ link, token });
 });
 
 module.exports = router;

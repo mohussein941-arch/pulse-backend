@@ -9,6 +9,7 @@ const { requireApiKey, requireUser } = require('../middleware/auth');
 const { encrypt, decrypt } = require('../utils/crypto');
 const { audit } = require('../middleware/audit');
 const { schemas, validate } = require('../utils/validate');
+const { syncGmailForUser } = require('../engine/gmailIngestion');
 
 // ─── Supabase (service role for token storage) ───────────────────────────────
 const supabase = createClient(
@@ -225,6 +226,36 @@ router.patch('/accounts/:id/set-primary', requireApiKey, requireUser, async (req
 
   if (error) return res.status(500).json({ error: error.message });
   res.json({ success: true });
+});
+
+// POST /api/email/sync — trigger Gmail thread sync for current user
+router.post('/sync', requireApiKey, requireUser, async (req, res) => {
+  try {
+    const result = await syncGmailForUser(req.userId);
+    audit(req.userId, 'email.sync', { meta: result, req });
+    res.json(result);
+  } catch (err) {
+    console.error('[Gmail Sync] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/email/threads/:accountId — get synced threads for an account
+router.get('/threads/:accountId', requireApiKey, requireUser, async (req, res) => {
+  try {
+    const { createClient } = require('@supabase/supabase-js');
+    const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+    const { data, error } = await db
+      .from('email_threads')
+      .select('id, subject, participants, last_message_at, last_message_from, snippet, message_count, is_unread_reply')
+      .eq('account_id', req.params.accountId)
+      .eq('user_id', req.userId)
+      .order('last_message_at', { ascending: false })
+      .limit(20);
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // DELETE /api/email/accounts/:id

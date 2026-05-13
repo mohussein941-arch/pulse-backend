@@ -38,12 +38,14 @@ const whatsappRouter           = require("./routes/whatsapp");
 const automationRouter         = require("./routes/automation");
 const onboardingRouter         = require("./routes/onboarding");
 const portalRouter             = require("./routes/portal");
+const handoverRouter           = require("./routes/handover");
 const portalManageRouter       = require("./routes/portalManage");
 const tasksRouter              = require("./routes/tasks");
 const briefingRouter           = require("./routes/briefing");
 const aiRouter                 = require("./routes/ai");
 const { runAutomationEngine }  = require("./engine/automationRunner");
 const { runBriefingEngine }    = require("./engine/briefingRunner");
+const { runGmailSync }         = require("./engine/gmailIngestion");
 const { requireApiKey, requireUser } = require("./middleware/auth");
 
 const app  = express();
@@ -102,6 +104,7 @@ app.use("/survey",  surveyRespondRouter);   // customers submit here — no auth
 app.use("/api/email",     emailAuthRouter);  // email OAuth callbacks must be public
 app.use("/api/whatsapp", whatsappRouter);   // webhook must be public — Meta sends here
 app.use("/portal",       portalRouter);     // customer portal — public magic link
+app.use("/handover",     handoverRouter);   // sales handover — public magic link
 
 // ── Protected API routes ──────────────────────────────────────────────────────
 app.use("/api", requireApiKey, requireUser);
@@ -137,7 +140,11 @@ app.listen(PORT, () => {
 
   // Run briefing engine every hour (generates + sends for users whose time is now)
   cron.schedule("0 * * * *", runBriefingEngine);
-  console.log("  Briefing engine scheduled (hourly)\n");
+  console.log("  Briefing engine scheduled (hourly)");
+
+  // Sync Gmail threads every 6 hours
+  cron.schedule("0 */6 * * *", runGmailSync);
+  console.log("  Gmail sync scheduled (every 6 hours)\n");
 });
 
 module.exports = app;

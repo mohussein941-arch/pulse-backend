@@ -51,6 +51,7 @@ router.get("/", async (req, res, next) => {
       notes:        a.notes || "",
       prepNotes:    a.prep_notes || "",
       archived:     a.archived || false,
+      domain:       a.domain || "",
       activePlaybookId:    a.active_playbook_id || null,
       activePlaybookSteps: a.active_playbook_steps || {},
       snoozedPlaybooks:    a.snoozed_playbooks || [],
@@ -150,6 +151,7 @@ router.patch("/:id", async (req, res, next) => {
       notes: "notes", prepNotes: "prep_notes", archived: "archived",
       successGoal: "success_goal", activePlaybookId: "active_playbook_id",
       activePlaybookSteps: "active_playbook_steps", snoozedPlaybooks: "snoozed_playbooks",
+      domain: "domain",
     };
 
     Object.entries(fieldMap).forEach(([front, db]) => {
