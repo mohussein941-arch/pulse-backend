@@ -15,6 +15,8 @@ const emailAuthRouter          = require("./routes/emailAuth");
 const whatsappRouter           = require("./routes/whatsapp");
 const automationRouter         = require("./routes/automation");
 const onboardingRouter         = require("./routes/onboarding");
+const portalRouter             = require("./routes/portal");
+const portalManageRouter       = require("./routes/portalManage");
 const { runAutomationEngine }  = require("./engine/automationRunner");
 const { requireApiKey, requireUser } = require("./middleware/auth");
 
@@ -52,6 +54,7 @@ app.use("/oauth",   oauthRouter);
 app.use("/survey",  surveyRespondRouter);   // customers submit here — no auth
 app.use("/api/email",     emailAuthRouter);  // email OAuth callbacks must be public
 app.use("/api/whatsapp", whatsappRouter);   // webhook must be public — Meta sends here
+app.use("/portal",       portalRouter);     // customer portal — public magic link
 
 // ── Protected API routes ──────────────────────────────────────────────────────
 app.use("/api", requireApiKey, requireUser);
@@ -60,6 +63,7 @@ app.use("/api/sync",       syncRouter);
 app.use("/api/surveys",    surveysRouter);
 app.use("/api/automation",  automationRouter);
 app.use("/api/onboarding", onboardingRouter);
+app.use("/api/portal",    portalManageRouter);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {

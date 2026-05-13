@@ -375,3 +375,32 @@ create or replace trigger ob_plans_updated_at
 create or replace trigger ob_tasks_updated_at
   before update on onboarding_tasks
   for each row execute function update_updated_at();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CUSTOMER PORTAL — magic-link access, one portal per account
+-- ─────────────────────────────────────────────────────────────────────────────
+
+create table if not exists portal_links (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  account_id uuid not null references accounts(id) on delete cascade,
+  token      text not null unique default encode(gen_random_bytes(20), 'hex'),
+  config     jsonb not null default '{}',
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+-- One portal per account per CSM
+create unique index if not exists idx_portal_links_account
+  on portal_links(user_id, account_id);
+
+alter table portal_links enable row level security;
+create policy "portal_own" on portal_links
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create index if not exists idx_portal_token on portal_links(token);
+create index if not exists idx_portal_user  on portal_links(user_id);
+
+create or replace trigger portal_links_updated_at
+  before update on portal_links
+  for each row execute function update_updated_at();
