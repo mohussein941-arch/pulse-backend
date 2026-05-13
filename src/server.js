@@ -17,7 +17,10 @@ const automationRouter         = require("./routes/automation");
 const onboardingRouter         = require("./routes/onboarding");
 const portalRouter             = require("./routes/portal");
 const portalManageRouter       = require("./routes/portalManage");
+const tasksRouter              = require("./routes/tasks");
+const briefingRouter           = require("./routes/briefing");
 const { runAutomationEngine }  = require("./engine/automationRunner");
+const { runBriefingEngine }    = require("./engine/briefingRunner");
 const { requireApiKey, requireUser } = require("./middleware/auth");
 
 const app  = express();
@@ -63,7 +66,9 @@ app.use("/api/sync",       syncRouter);
 app.use("/api/surveys",    surveysRouter);
 app.use("/api/automation",  automationRouter);
 app.use("/api/onboarding", onboardingRouter);
-app.use("/api/portal",    portalManageRouter);
+app.use("/api/portal",     portalManageRouter);
+app.use("/api/tasks",      tasksRouter);
+app.use("/api/briefing",   briefingRouter);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -83,7 +88,11 @@ app.listen(PORT, () => {
 
   // Run automation engine every hour
   cron.schedule("0 * * * *", runAutomationEngine);
-  console.log("  Automation engine scheduled (hourly)\n");
+  console.log("  Automation engine scheduled (hourly)");
+
+  // Run briefing engine every hour (generates + sends for users whose time is now)
+  cron.schedule("0 * * * *", runBriefingEngine);
+  console.log("  Briefing engine scheduled (hourly)\n");
 });
 
 module.exports = app;
