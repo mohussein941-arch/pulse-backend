@@ -43,9 +43,11 @@ const portalManageRouter       = require("./routes/portalManage");
 const tasksRouter              = require("./routes/tasks");
 const briefingRouter           = require("./routes/briefing");
 const aiRouter                 = require("./routes/ai");
+const meetingsRouter           = require("./routes/meetings");
 const { runAutomationEngine }  = require("./engine/automationRunner");
 const { runBriefingEngine }    = require("./engine/briefingRunner");
 const { runGmailSync }         = require("./engine/gmailIngestion");
+const { runFirefliesSync }     = require("./engine/firefliesIngestion");
 const { requireApiKey, requireUser } = require("./middleware/auth");
 
 const app  = express();
@@ -117,6 +119,7 @@ app.use("/api/portal",     portalManageRouter);
 app.use("/api/tasks",      tasksRouter);
 app.use("/api/briefing",   briefingRouter);
 app.use("/api/ai",         app.get("aiRateLimit"), aiRouter);
+app.use("/api/meetings",   meetingsRouter);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -144,7 +147,11 @@ app.listen(PORT, () => {
 
   // Sync Gmail threads every 6 hours
   cron.schedule("0 */6 * * *", runGmailSync);
-  console.log("  Gmail sync scheduled (every 6 hours)\n");
+  console.log("  Gmail sync scheduled (every 6 hours)");
+
+  // Sync Fireflies meeting notes every 6 hours
+  cron.schedule("0 */6 * * *", runFirefliesSync);
+  console.log("  Fireflies sync scheduled (every 6 hours)\n");
 });
 
 module.exports = app;

@@ -578,6 +578,19 @@ const fetchZohoDesk = async ({ clientId, clientSecret, refreshToken, dc = "com",
   }));
 };
 
+// ─── Fireflies.ai (connection test only — sync handled by firefliesIngestion) ──
+const fetchFireflies = async ({ apiKey }, fieldMap) => {
+  const res = await axios.post(
+    "https://api.fireflies.ai/graphql",
+    { query: "{ user { user_id name email } }" },
+    { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } }
+  );
+  if (res.data?.errors?.length) {
+    throw new Error(res.data.errors[0]?.message || "Invalid API key");
+  }
+  return []; // actual sync is handled by the Fireflies ingestion engine
+};
+
 // ─── Freshdesk ────────────────────────────────────────────────────────────────
 const fetchFreshdesk = async ({ domain, apiKey }, fieldMap) => {
   const auth    = Buffer.from(`${apiKey}:X`).toString("base64");
@@ -631,6 +644,7 @@ const CONNECTORS = {
   helpscout:       fetchHelpScout,
   kayako:          fetchKayako,
   front:           fetchFront,
+  fireflies:       fetchFireflies,
 };
 
 module.exports = { CONNECTORS };
