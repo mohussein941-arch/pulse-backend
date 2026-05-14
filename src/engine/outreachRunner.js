@@ -47,7 +47,7 @@ function buildDraft(account, triggerType, ctx) {
         body:
 `Hi ${contact},
 
-I wanted to reach out because I've noticed some changes in ${name}'s metrics that I'd like to understand better.${lastTouchLine ? '\n\n'+lastTouchLine : ''}
+I wanted to reach out because I've noticed some changes in ${name}'s metrics that I'd like to understand better.
 
 Would you be open to a 20-minute call this week? I'd love to hear how things are going from your side and make sure we're supporting you well.
 
@@ -60,7 +60,7 @@ ${csm}`,
         subject: `Something worth sharing — ${name}`,
         body:
 `Hi ${contact},
-${lastTouchLine ? '\n'+lastTouchLine+'\n' : ''}
+
 I've been thinking about ${name} and wanted to reach out with a couple of things that might be useful for your team right now.
 
 Would a quick 15-minute call work this week? Happy to keep it focused and make it worth your time.
@@ -75,7 +75,7 @@ ${csm}`,
         body:
 `Hi ${contact},
 
-${name}'s renewal is coming up on ${renewal}. Before we get into the administrative side, I'd love to take 30 minutes to do a proper review together — what's worked, what could be better, and what success looks like in the next period.${lastTouchLine ? '\n\n'+lastTouchLine : ''}
+${name}'s renewal is coming up on ${renewal}. Before we get into the administrative side, I'd love to take 30 minutes to do a proper review together — what's worked, what could be better, and what success looks like in the next period.
 
 Are you available this week or next for a conversation?
 
@@ -103,7 +103,7 @@ ${csm}`,
         body:
 `Hi ${contact},
 
-I noticed product engagement at ${name} has been lower lately. In my experience, this usually means one of three things: the team has changed, there's a friction point we haven't addressed, or there's a feature that would genuinely help but hasn't been introduced yet.${lastTouchLine ? '\n\n'+lastTouchLine : ''}
+I noticed product engagement at ${name} has been lower lately. In my experience, this usually means one of three things: the team has changed, there's a friction point we haven't addressed, or there's a feature that would genuinely help but hasn't been introduced yet.
 
 Would a 20-minute call work? I'd come prepared with a few specific ideas.
 
@@ -117,7 +117,7 @@ ${csm}`,
         body:
 `Hi ${contact},
 
-Based on where ${name} is in your journey, I think now is the right moment to get deliberate about what the next chapter looks like.${lastTouchLine ? '\n\n'+lastTouchLine : ''}
+Based on where ${name} is in your journey, I think now is the right moment to get deliberate about what the next chapter looks like.
 
 I have a structured success plan I'd like to walk you through — it takes 30 minutes and gives us a shared roadmap. Would that be useful?
 
@@ -145,7 +145,7 @@ ${csm}`,
         body:
 `Hi ${contact},
 
-Your renewal is still ${account.renewal_date ? Math.ceil((new Date(account.renewal_date)-Date.now())/86400000) : 'some time'} away, but I'd rather have this conversation now than in a rush later.${lastTouchLine ? '\n\n'+lastTouchLine : ''}
+Your renewal is still ${account.renewal_date ? Math.ceil((new Date(account.renewal_date)-Date.now())/86400000) : 'some time'} away, but I'd rather have this conversation now than in a rush later.
 
 I'd love to schedule a brief check-in to make sure we're on a strong trajectory together. Would 20 minutes work in the next two weeks?
 
@@ -267,8 +267,14 @@ async function runOutreachForUser(userId, accounts) {
       noChampion:       !stakeholders?.some(s => ['Champion','Economic Buyer'].includes(s.role)),
     };
 
-    // Add champion risk signal if no Champion or Economic Buyer is mapped
-    if (ctx.noChampion) signals.push('no_champion');
+    // Add champion risk signal if no Champion or Economic Buyer is mapped.
+    // Guard: skip accounts created within the last 14 days — stakeholders are still being entered.
+    if (ctx.noChampion && daysSince(account.created_at) >= 14) {
+      signals.push('no_champion');
+      // Suppress no_contact — both target the same absence; no_champion is more specific.
+      const ncIdx = signals.indexOf('no_contact');
+      if (ncIdx !== -1) signals.splice(ncIdx, 1);
+    }
 
     for (const triggerType of signals) {
       if (await recentlyQueued(userId, account.id, triggerType)) continue;
@@ -287,12 +293,15 @@ async function runOutreachForUser(userId, accounts) {
         status:          'pending',
         ai_generated:    false, // AI_HOOK: flip to true when callAI is used
         metadata: {
-          health_score:  account.health_score,
-          nps:           account.nps,
-          product_usage: account.product_usage,
-          renewal_date:  account.renewal_date,
-          arr:           account.arr,
-          plan:          account.plan,
+          health_score:        account.health_score,
+          nps:                 account.nps,
+          product_usage:       account.product_usage,
+          renewal_date:        account.renewal_date,
+          arr:                 account.arr,
+          plan:                account.plan,
+          last_activity_note:  ctx.lastActivityNote  || null,
+          last_activity_date:  ctx.lastActivityDate  || null,
+          last_activity_type:  ctx.lastActivityType  || null,
         },
       });
       queued++;
@@ -319,7 +328,7 @@ async function runOutreachRunner() {
     for (const userId of userIds) {
       const { data: accounts } = await supabase
         .from('accounts')
-        .select('id, name, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, active_playbook_id')
+        .select('id, name, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, active_playbook_id, created_at')
         .eq('user_id', userId)
         .eq('archived', false);
 
