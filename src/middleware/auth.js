@@ -14,6 +14,19 @@
 
 const { createClient } = require("@supabase/supabase-js");
 
+// Reuse a single anon-key client for JWT verification across all requests
+let _anonClient = null;
+const getAnonClient = () => {
+  if (!_anonClient) {
+    _anonClient = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_ANON_KEY,
+      { auth: { persistSession: false } }
+    );
+  }
+  return _anonClient;
+};
+
 // ── API secret check (prevents non-Pulse clients hitting the API) ─────────────
 const requireApiKey = (req, res, next) => {
   const secret = process.env.PULSE_API_SECRET;
@@ -41,14 +54,7 @@ const requireUser = async (req, res, next) => {
   const token = authHeader.replace("Bearer ", "").trim();
 
   try {
-    // Use Supabase's built-in JWT verification
-    const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_ANON_KEY, // anon key for user-scoped auth
-      { auth: { persistSession: false } }
-    );
-
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    const { data: { user }, error } = await getAnonClient().auth.getUser(token);
 
     if (error || !user) {
       return res.status(401).json({ error: "Unauthorised — invalid or expired token" });
