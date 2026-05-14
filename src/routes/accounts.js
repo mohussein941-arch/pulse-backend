@@ -261,6 +261,7 @@ router.post("/bulk", async (req, res, next) => {
       return {
         user_id:       req.userId,
         name:          body.name,
+        domain:        body.domain?.trim().toLowerCase() || null,
         industry:      body.industry || "",
         plan:          body.plan || "Starter",
         arr:           body.arr || 0,
