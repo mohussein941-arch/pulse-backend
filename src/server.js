@@ -44,6 +44,7 @@ const tasksRouter              = require("./routes/tasks");
 const briefingRouter           = require("./routes/briefing");
 const aiRouter                 = require("./routes/ai");
 const meetingsRouter           = require("./routes/meetings");
+const { publicRouter: webhookPublicRouter, apiRouter: webhookApiRouter } = require("./routes/webhook");
 const { runAutomationEngine }  = require("./engine/automationRunner");
 const { runBriefingEngine }    = require("./engine/briefingRunner");
 const { runGmailSync }         = require("./engine/gmailIngestion");
@@ -105,8 +106,9 @@ app.use("/oauth",   oauthRouter);
 app.use("/survey",  surveyRespondRouter);   // customers submit here — no auth
 app.use("/api/email",     emailAuthRouter);  // email OAuth callbacks must be public
 app.use("/api/whatsapp", whatsappRouter);   // webhook must be public — Meta sends here
-app.use("/portal",       portalRouter);     // customer portal — public magic link
-app.use("/handover",     handoverRouter);   // sales handover — public magic link
+app.use("/portal",       portalRouter);       // customer portal — public magic link
+app.use("/handover",     handoverRouter);     // sales handover — public magic link
+app.use("/webhook",      webhookPublicRouter); // product usage webhook — public
 
 // ── Protected API routes ──────────────────────────────────────────────────────
 app.use("/api", requireApiKey, requireUser);
@@ -120,6 +122,7 @@ app.use("/api/tasks",      tasksRouter);
 app.use("/api/briefing",   briefingRouter);
 app.use("/api/ai",         app.get("aiRateLimit"), aiRouter);
 app.use("/api/meetings",   meetingsRouter);
+app.use("/api/webhook",    webhookApiRouter);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {

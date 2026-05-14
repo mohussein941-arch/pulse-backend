@@ -41,7 +41,8 @@ router.get("/", async (req, res, next) => {
       cesHistory:   (a.ces_history || [])
                       .sort((x, y) => x.recorded_at.localeCompare(y.recorded_at))
                       .map(c => ({ date: c.recorded_at, value: parseFloat(c.value) })),
-      productUsage: a.product_usage || 60,
+      productUsage:          a.product_usage || 60,
+      productUsageUpdatedAt: a.product_usage_updated_at || null,
       openTickets:  a.open_tickets || 0,
       healthScore:  a.health_score,
       churnRisk:    a.churn_risk,
@@ -284,6 +285,26 @@ router.post("/bulk", async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// ── GET /api/accounts/:id/usage-history ──────────────────────────────────────
+router.get("/:id/usage-history", async (req, res, next) => {
+  try {
+    const { data, error } = await supabase
+      .from("usage_history")
+      .select("product_usage, active_users, licensed_seats, dau, mau, features_used_count, total_features, sessions_last_30d, recorded_at")
+      .eq("account_id", req.params.id)
+      .eq("user_id", req.userId)
+      .order("recorded_at", { ascending: false })
+      .limit(90);
+
+    if (error) throw error;
+
+    const history = (data || []).reverse(); // oldest first for charting
+    const latest  = data?.[0] || null;
+
+    res.json({ history, latest });
+  } catch (err) { next(err); }
 });
 
 module.exports = router;
