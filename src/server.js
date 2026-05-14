@@ -46,10 +46,15 @@ const aiRouter                 = require("./routes/ai");
 const meetingsRouter           = require("./routes/meetings");
 const { publicRouter: webhookPublicRouter, apiRouter: webhookApiRouter } = require("./routes/webhook");
 const auditLogRouter               = require("./routes/auditLog");
+const outreachRouter               = require("./routes/outreach");
+const schedulesRouter              = require("./routes/schedules");
 const { runAutomationEngine }  = require("./engine/automationRunner");
 const { runBriefingEngine }    = require("./engine/briefingRunner");
 const { runGmailSync }         = require("./engine/gmailIngestion");
 const { runFirefliesSync }     = require("./engine/firefliesIngestion");
+const { runOutreachRunner }    = require("./engine/outreachRunner");
+const { runSurveyScheduler }   = require("./engine/surveyScheduler");
+const { runDigestRunner }      = require("./engine/digestRunner");
 const { requireApiKey, requireUser } = require("./middleware/auth");
 
 const app  = express();
@@ -125,6 +130,8 @@ app.use("/api/ai",         app.get("aiRateLimit"), aiRouter);
 app.use("/api/meetings",   meetingsRouter);
 app.use("/api/webhook",    webhookApiRouter);
 app.use("/api/audit",     auditLogRouter);
+app.use("/api/outreach",  outreachRouter);
+app.use("/api/schedules", schedulesRouter);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -156,7 +163,19 @@ app.listen(PORT, () => {
 
   // Sync Fireflies meeting notes every 6 hours
   cron.schedule("0 */6 * * *", runFirefliesSync);
-  console.log("  Fireflies sync scheduled (every 6 hours)\n");
+  console.log("  Fireflies sync scheduled (every 6 hours)");
+
+  // Detect signals and queue outreach drafts every 6 hours
+  cron.schedule("0 */6 * * *", runOutreachRunner);
+  console.log("  Outreach runner scheduled (every 6 hours)");
+
+  // Auto-send scheduled surveys daily at 09:00
+  cron.schedule("0 9 * * *", runSurveyScheduler);
+  console.log("  Survey scheduler scheduled (daily 09:00)");
+
+  // Build stakeholder health digests daily at 08:00
+  cron.schedule("0 8 * * *", runDigestRunner);
+  console.log("  Digest runner scheduled (daily 08:00)\n");
 });
 
 module.exports = app;

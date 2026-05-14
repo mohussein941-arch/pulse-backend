@@ -168,6 +168,19 @@ async function syncOneGmailAccount(emailAccount, userId, emailMap, domainMap) {
         synced_at:        new Date().toISOString(),
       }, { onConflict: 'user_id,gmail_thread_id', ignoreDuplicates: false });
 
+      // Auto-log one activity entry per thread (deduped via external_ref)
+      await supabase.from('activity_log').upsert({
+        user_id:      userId,
+        account_id:   accountId,
+        type:         'Email',
+        source:       'gmail_auto',
+        external_ref: `gmail:${thread.id}`,
+        note:         parsed.subject !== '(no subject)'
+          ? `Email thread: ${parsed.subject}`
+          : `Email thread with ${parsed.participants.slice(0, 2).join(', ')}`,
+        logged_at:    parsed.lastMessageAt.split('T')[0],
+      }, { onConflict: 'user_id,external_ref', ignoreDuplicates: true });
+
       synced.push(thread.id);
       accountIds.add(accountId);
     } catch {

@@ -77,6 +77,15 @@ function triggered(rule, account, ctx) {
       );
     }
 
+    case 'playbook_signal': {
+      // Fires when account meets conditions for any playbook but has none active
+      if (account.active_playbook_id) return false;
+      const h = account.health_score ?? 100;
+      const u = account.product_usage ?? 100;
+      const d = daysUntil(account.renewal_date);
+      return h < 50 || u < 35 || (d >= 0 && d <= 45);
+    }
+
     default:
       return false;
   }
@@ -133,10 +142,19 @@ async function executeAction(rule, account, ctx) {
     }
 
     case 'create_task': {
-      const title = resolve(cfg.title || `Follow up: ${account.name}`, account);
-      await supabase.from('activity_log').insert({
-        user_id: rule.user_id, account_id: account.id,
-        type: 'Task', note: title, logged_at: today,
+      const title       = resolve(cfg.title || `Follow up: ${account.name}`, account);
+      const description = resolve(cfg.description || '', account);
+      await supabase.from('tasks').insert({
+        user_id:      rule.user_id,
+        account_id:   account.id,
+        account_name: account.name,
+        title,
+        description:  description || null,
+        priority:     cfg.priority || 'medium',
+        due_date:     cfg.due_days
+          ? new Date(Date.now() + cfg.due_days * 86400000).toISOString().split('T')[0]
+          : null,
+        source:       'automation',
       });
       return title;
     }
@@ -222,7 +240,7 @@ async function runAutomationEngine() {
       // Fetch accounts for this user
       const { data: accounts } = await supabase
         .from('accounts')
-        .select('id, name, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, archived, created_at')
+        .select('id, name, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, archived, created_at, active_playbook_id')
         .eq('user_id', userId)
         .eq('archived', false);
 

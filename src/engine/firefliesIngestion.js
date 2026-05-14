@@ -100,6 +100,19 @@ async function syncFirefliesForUser(userId) {
       synced_at:      new Date().toISOString(),
     }, { onConflict: "user_id,fireflies_id" });
 
+    // Auto-log one activity entry per meeting (deduped via external_ref)
+    if (accountId) {
+      await supabase.from("activity_log").upsert({
+        user_id:      userId,
+        account_id:   accountId,
+        type:         "Meeting",
+        source:       "fireflies_auto",
+        external_ref: `fireflies:${t.id}`,
+        note:         t.title || "Meeting synced from Fireflies",
+        logged_at:    meetingDate ? meetingDate.split("T")[0] : new Date().toISOString().split("T")[0],
+      }, { onConflict: "user_id,external_ref", ignoreDuplicates: true });
+    }
+
     synced++;
     if (accountId) {
       matched++;
