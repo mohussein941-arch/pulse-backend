@@ -545,6 +545,39 @@ const fetchFront = async ({ apiToken }, fieldMap) => {
   }));
 };
 
+// ─── Zoho Desk (standalone) ───────────────────────────────────────────────────
+const fetchZohoDesk = async ({ clientId, clientSecret, refreshToken, dc = "com", orgId }, fieldMap) => {
+  const tokenRes = await axios.post(
+    `https://accounts.zoho.${dc}/oauth/v2/token`,
+    null,
+    { params: { refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret, grant_type: "refresh_token" } }
+  );
+  if (!tokenRes.data.access_token) throw new Error("Zoho token refresh failed — check credentials");
+  const headers = { Authorization: `Zoho-oauthtoken ${tokenRes.data.access_token}`, orgId };
+  const base    = `https://desk.zoho.${dc}/api/v1`;
+
+  const accountsRes = await axios.get(`${base}/accounts?limit=100`, { headers });
+  const accounts    = accountsRes.data?.data || [];
+
+  const ticketsRes = await axios.get(`${base}/tickets?status=open&limit=100`, { headers })
+    .catch(() => ({ data: { data: [] } }));
+  const ticketsByAccount = {};
+  for (const t of (ticketsRes.data?.data || [])) {
+    if (t.accountId) ticketsByAccount[t.accountId] = (ticketsByAccount[t.accountId] || 0) + 1;
+  }
+
+  return accounts.map(acct => ({
+    externalId:  acct.id,
+    source:      "zoho_desk",
+    name:        acct.accountName || "Unknown",
+    industry:    acct.industry || "",
+    arr:         0,
+    renewalDate: null,
+    openTickets: ticketsByAccount[acct.id] || 0,
+    lastContact: toDate(acct.modifiedTime) || new Date().toISOString().split("T")[0],
+  }));
+};
+
 // ─── Freshdesk ────────────────────────────────────────────────────────────────
 const fetchFreshdesk = async ({ domain, apiKey }, fieldMap) => {
   const auth    = Buffer.from(`${apiKey}:X`).toString("base64");
@@ -585,6 +618,7 @@ const CONNECTORS = {
   hubspot:         fetchHubSpot,
   salesforce:      fetchSalesforce,
   zoho:            fetchZoho,
+  zoho_desk:       fetchZohoDesk,
   odoo:            fetchOdoo,
   freshsales:      fetchFreshSales,
   freshdesk:       fetchFreshdesk,
@@ -592,7 +626,6 @@ const CONNECTORS = {
   pipedrive:       fetchPipedrive,
   dynamics365:     fetchDynamics,
   zendesk:         fetchZendesk,
-  jira:            fetchJira,
   servicenow:      fetchServiceNow,
   hubspot_service: fetchHubSpotService,
   helpscout:       fetchHelpScout,
