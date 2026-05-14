@@ -48,6 +48,7 @@ const { publicRouter: webhookPublicRouter, apiRouter: webhookApiRouter } = requi
 const auditLogRouter               = require("./routes/auditLog");
 const outreachRouter               = require("./routes/outreach");
 const schedulesRouter              = require("./routes/schedules");
+const performanceRouter            = require("./routes/performance");
 const { runAutomationEngine }  = require("./engine/automationRunner");
 const { runBriefingEngine }    = require("./engine/briefingRunner");
 const { runGmailSync }         = require("./engine/gmailIngestion");
@@ -130,8 +131,9 @@ app.use("/api/ai",         app.get("aiRateLimit"), aiRouter);
 app.use("/api/meetings",   meetingsRouter);
 app.use("/api/webhook",    webhookApiRouter);
 app.use("/api/audit",     auditLogRouter);
-app.use("/api/outreach",  outreachRouter);
-app.use("/api/schedules", schedulesRouter);
+app.use("/api/outreach",     outreachRouter);
+app.use("/api/schedules",    schedulesRouter);
+app.use("/api/performance",  performanceRouter);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {

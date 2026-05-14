@@ -18,10 +18,11 @@ router.get("/", async (req, res, next) => {
       .from("accounts")
       .select(`
         *,
-        ces_history ( value, recorded_at ),
-        stakeholders ( id, name, title, email, role, sentiment, last_touch ),
-        activity_log ( id, type, note, logged_at ),
-        milestones   ( id, text, done, sort_order )
+        ces_history    ( value, recorded_at ),
+        health_history ( score, recorded_at ),
+        stakeholders   ( id, name, title, email, role, sentiment, last_touch ),
+        activity_log   ( id, type, note, logged_at ),
+        milestones     ( id, text, done, sort_order )
       `)
       .eq("user_id", req.userId)
       .eq("archived", false)
@@ -41,6 +42,9 @@ router.get("/", async (req, res, next) => {
       cesHistory:   (a.ces_history || [])
                       .sort((x, y) => x.recorded_at.localeCompare(y.recorded_at))
                       .map(c => ({ date: c.recorded_at, value: parseFloat(c.value) })),
+      healthHistory: (a.health_history || [])
+                      .sort((x, y) => x.recorded_at.localeCompare(y.recorded_at))
+                      .map(h => ({ date: h.recorded_at, score: h.score })),
       productUsage:          a.product_usage || 60,
       productUsageUpdatedAt: a.product_usage_updated_at || null,
       openTickets:  a.open_tickets || 0,
@@ -56,6 +60,16 @@ router.get("/", async (req, res, next) => {
       activePlaybookId:    a.active_playbook_id || null,
       activePlaybookSteps: a.active_playbook_steps || {},
       snoozedPlaybooks:    a.snoozed_playbooks || [],
+      // Expansion
+      expansionPotential: a.expansion_potential || false,
+      expansionArr:       parseFloat(a.expansion_arr) || 0,
+      expansionStage:     a.expansion_stage || "",
+      expansionNotes:     a.expansion_notes || "",
+      // Escalation
+      escalationStatus: a.escalation_status || null,
+      escalationReason: a.escalation_reason || "",
+      escalationSince:  a.escalation_since  || null,
+      escalationNotes:  a.escalation_notes  || "",
       stakeholders: (a.stakeholders || []).map(s => ({
         id:        s.id,
         name:      s.name,
@@ -114,13 +128,21 @@ router.post("/", async (req, res, next) => {
 
     if (error) throw error;
 
+    const today = new Date().toISOString().split("T")[0];
+
+    // Write initial CES history entry
     if (body.ces) {
       await supabase.from("ces_history").insert({
         user_id: req.userId, account_id: data.id,
-        value: body.ces,
-        recorded_at: new Date().toISOString().split("T")[0],
+        value: body.ces, recorded_at: today,
       });
     }
+
+    // Write initial health history entry
+    await supabase.from("health_history").insert({
+      user_id: req.userId, account_id: data.id,
+      score: healthScore, recorded_at: today,
+    });
 
     res.status(201).json({ account: data });
   } catch (err) {
@@ -136,7 +158,7 @@ router.patch("/:id", async (req, res, next) => {
 
     // Verify ownership before touching anything
     const { data: existing, error: ownErr } = await supabase
-      .from("accounts").select("id, user_id, nps, ces, product_usage, open_tickets")
+      .from("accounts").select("id, user_id, nps, ces, product_usage, open_tickets, health_score")
       .eq("id", id).eq("user_id", req.userId).single();
 
     if (ownErr || !existing) {
@@ -153,6 +175,16 @@ router.patch("/:id", async (req, res, next) => {
       successGoal: "success_goal", activePlaybookId: "active_playbook_id",
       activePlaybookSteps: "active_playbook_steps", snoozedPlaybooks: "snoozed_playbooks",
       domain: "domain",
+      // Expansion
+      expansionPotential: "expansion_potential",
+      expansionArr:       "expansion_arr",
+      expansionStage:     "expansion_stage",
+      expansionNotes:     "expansion_notes",
+      // Escalation
+      escalationStatus: "escalation_status",
+      escalationReason: "escalation_reason",
+      escalationSince:  "escalation_since",
+      escalationNotes:  "escalation_notes",
     };
 
     Object.entries(fieldMap).forEach(([front, db]) => {
@@ -160,6 +192,7 @@ router.patch("/:id", async (req, res, next) => {
     });
 
     // Recalculate health if signals changed
+    let newHealthScore = null;
     if (["nps","ces","productUsage","openTickets"].some(f => body[f] !== undefined)) {
       const { healthScore, churnRisk, stage } = calcHealth({
         nps:          body.nps          ?? existing.nps,
@@ -170,6 +203,7 @@ router.patch("/:id", async (req, res, next) => {
       updates.health_score = healthScore;
       updates.churn_risk   = churnRisk;
       updates.stage        = stage;
+      newHealthScore       = healthScore;
     }
 
     // Success plan milestones
@@ -194,6 +228,16 @@ router.patch("/:id", async (req, res, next) => {
         user_id: req.userId, account_id: id,
         value: body.newCesReading.value,
         recorded_at: body.newCesReading.date || new Date().toISOString().split("T")[0],
+      });
+    }
+
+    // Write health history snapshot if health changed
+    if (newHealthScore !== null) {
+      await supabase.from("health_history").insert({
+        user_id:    req.userId,
+        account_id: id,
+        score:      newHealthScore,
+        recorded_at: new Date().toISOString().split("T")[0],
       });
     }
 
@@ -300,10 +344,68 @@ router.get("/:id/usage-history", async (req, res, next) => {
 
     if (error) throw error;
 
-    const history = (data || []).reverse(); // oldest first for charting
+    const history = (data || []).reverse();
     const latest  = data?.[0] || null;
 
     res.json({ history, latest });
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/accounts/churn ───────────────────────────────────────────────────
+router.get("/churn", async (req, res, next) => {
+  try {
+    const { data, error } = await supabase
+      .from("churn_events")
+      .select("*")
+      .eq("user_id", req.userId)
+      .order("churned_at", { ascending: false })
+      .limit(50);
+
+    if (error) throw error;
+    res.json({ events: data || [] });
+  } catch (err) { next(err); }
+});
+
+// ── POST /api/accounts/:id/churn ─────────────────────────────────────────────
+// Logs a churn event and archives the account in one atomic operation.
+router.post("/:id/churn", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { reason, notes, churnedAt } = req.body;
+
+    if (!reason) return res.status(400).json({ error: "reason is required" });
+
+    // Verify ownership and get account details
+    const { data: account, error: ownErr } = await supabase
+      .from("accounts")
+      .select("id, user_id, name, arr")
+      .eq("id", id)
+      .eq("user_id", req.userId)
+      .single();
+
+    if (ownErr || !account) return res.status(404).json({ error: "Account not found" });
+
+    // Log churn event
+    const { error: churnErr } = await supabase.from("churn_events").insert({
+      user_id:      req.userId,
+      account_id:   id,
+      account_name: account.name,
+      arr:          account.arr || 0,
+      reason,
+      notes:        notes || null,
+      churned_at:   churnedAt || new Date().toISOString().split("T")[0],
+    });
+    if (churnErr) throw churnErr;
+
+    // Archive the account
+    const { error: archErr } = await supabase
+      .from("accounts")
+      .update({ archived: true })
+      .eq("id", id)
+      .eq("user_id", req.userId);
+    if (archErr) throw archErr;
+
+    res.json({ success: true });
   } catch (err) { next(err); }
 });
 
