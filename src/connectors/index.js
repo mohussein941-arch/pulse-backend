@@ -78,25 +78,67 @@ const fetchSalesforce = async ({ instanceUrl, accessToken }, fieldMap) => {
   });
 };
 
-// ─── Zoho CRM ─────────────────────────────────────────────────────────────────
-const fetchZoho = async ({ accessToken }, fieldMap) => {
-  // accessToken comes from OAuth flow (see oauth.js)
-  const fields = Object.keys(fieldMap).join(",");
-  const res    = await axios.get(
-    `https://www.zohoapis.com/crm/v3/Accounts?fields=${fields}&per_page=200`,
-    { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } }
+// ─── Zoho CRM + Zoho Desk ────────────────────────────────────────────────────
+const fetchZoho = async ({ clientId, clientSecret, refreshToken, dc = "com", deskOrgId }, fieldMap) => {
+  // Step 1: get a fresh access token using the refresh token
+  const tokenRes = await axios.post(
+    `https://accounts.zoho.${dc}/oauth/v2/token`,
+    null,
+    { params: { refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret, grant_type: "refresh_token" } }
   );
-  return ((res.data || {}).data || []).map(r => {
-    const mapped = applyFieldMap(r, fieldMap);
+  if (!tokenRes.data.access_token) throw new Error("Zoho token refresh failed — check credentials");
+  const accessToken = tokenRes.data.access_token;
+  const authHeader  = { Authorization: `Zoho-oauthtoken ${accessToken}` };
+  const crmBase     = `https://www.zohoapis.${dc}/crm/v6`;
+
+  // Step 2: fetch CRM accounts
+  const crmFields = ["Account_Name","Industry","Annual_Revenue","Contract_Renewal_Date","Last_Activity_Time","Website"].join(",");
+  const accountsRes = await axios.get(`${crmBase}/Accounts?fields=${crmFields}&per_page=200`, { headers: authHeader });
+
+  // Step 3: fetch CRM contacts (for stakeholders)
+  const contactsRes = await axios.get(
+    `${crmBase}/Contacts?fields=First_Name,Last_Name,Email,Title,Account_Name&per_page=200`,
+    { headers: authHeader }
+  ).catch(() => ({ data: { data: [] } }));
+
+  // Build contacts-by-account-name lookup
+  const contactsByAccount = {};
+  for (const c of ((contactsRes.data || {}).data || [])) {
+    const acctName = c.Account_Name?.name || c.Account_Name || null;
+    if (!acctName) continue;
+    if (!contactsByAccount[acctName]) contactsByAccount[acctName] = [];
+    contactsByAccount[acctName].push({
+      name:  `${c.First_Name || ""} ${c.Last_Name || ""}`.trim(),
+      email: c.Email || null,
+      title: c.Title || "",
+    });
+  }
+
+  // Step 4: fetch Zoho Desk open tickets (optional — only if deskOrgId provided)
+  const deskTickets = {};
+  if (deskOrgId) {
+    const deskRes = await axios.get(
+      `https://desk.zoho.${dc}/api/v1/tickets?status=open&limit=100`,
+      { headers: { ...authHeader, orgId: deskOrgId } }
+    ).catch(() => ({ data: { data: [] } }));
+    for (const t of ((deskRes.data || {}).data || [])) {
+      const name = t.account?.accountName;
+      if (name) deskTickets[name] = (deskTickets[name] || 0) + 1;
+    }
+  }
+
+  return ((accountsRes.data || {}).data || []).map(r => {
+    const name = r.Account_Name || "Unknown";
     return {
-      externalId: r.id,
-      source:     "zoho",
-      name:       mapped.name || r.Account_Name || "Unknown",
-      industry:   mapped.industry || "",
-      arr:        toNum(mapped.arr),
-      renewalDate:toDate(mapped.renewalDate),
-      openTickets:toNum(mapped.openTickets),
-      lastContact:toDate(mapped.lastContact) || new Date().toISOString().split("T")[0],
+      externalId:  r.id,
+      source:      "zoho",
+      name,
+      industry:    r.Industry   || "",
+      arr:         toNum(r.Annual_Revenue),
+      renewalDate: toDate(r.Contract_Renewal_Date),
+      openTickets: deskTickets[name] || 0,
+      lastContact: toDate(r.Last_Activity_Time) || new Date().toISOString().split("T")[0],
+      contacts:    contactsByAccount[name] || [],
     };
   });
 };
@@ -503,23 +545,59 @@ const fetchFront = async ({ apiToken }, fieldMap) => {
   }));
 };
 
+// ─── Freshdesk ────────────────────────────────────────────────────────────────
+const fetchFreshdesk = async ({ domain, apiKey }, fieldMap) => {
+  const auth    = Buffer.from(`${apiKey}:X`).toString("base64");
+  const headers = { Authorization: `Basic ${auth}`, "Content-Type": "application/json" };
+  const base    = `https://${domain}.freshdesk.com/api/v2`;
+
+  // Fetch all companies
+  const companiesRes = await axios.get(`${base}/companies?page=1&per_page=100`, { headers });
+  const companies    = companiesRes.data || [];
+
+  return await Promise.all(companies.map(async company => {
+    let openTickets = 0;
+    try {
+      // status=2 → Open in Freshdesk
+      const tRes = await axios.get(
+        `${base}/tickets?company_id=${company.id}&status=2&per_page=100`,
+        { headers }
+      );
+      openTickets = Array.isArray(tRes.data) ? tRes.data.length : 0;
+    } catch {}
+
+    return {
+      externalId:  String(company.id),
+      source:      "freshdesk",
+      name:        company.name || "Unknown",
+      industry:    "",
+      arr:         0,
+      renewalDate: null,
+      openTickets,
+      lastContact: toDate(company.updated_at) || new Date().toISOString().split("T")[0],
+      notes:       company.description || "",
+    };
+  }));
+};
+
 // ─── Connector registry ───────────────────────────────────────────────────────
 const CONNECTORS = {
-  hubspot:       fetchHubSpot,
-  salesforce:    fetchSalesforce,
-  zoho:          fetchZoho,
-  odoo:          fetchOdoo,
-  freshsales:    fetchFreshSales,
-  intercom:      fetchIntercom,
-  pipedrive:     fetchPipedrive,
-  dynamics365:   fetchDynamics,
-  zendesk:       fetchZendesk,
-  jira:          fetchJira,
-  servicenow:    fetchServiceNow,
+  hubspot:         fetchHubSpot,
+  salesforce:      fetchSalesforce,
+  zoho:            fetchZoho,
+  odoo:            fetchOdoo,
+  freshsales:      fetchFreshSales,
+  freshdesk:       fetchFreshdesk,
+  intercom:        fetchIntercom,
+  pipedrive:       fetchPipedrive,
+  dynamics365:     fetchDynamics,
+  zendesk:         fetchZendesk,
+  jira:            fetchJira,
+  servicenow:      fetchServiceNow,
   hubspot_service: fetchHubSpotService,
-  helpscout:     fetchHelpScout,
-  kayako:        fetchKayako,
-  front:         fetchFront,
+  helpscout:       fetchHelpScout,
+  kayako:          fetchKayako,
+  front:           fetchFront,
 };
 
 module.exports = { CONNECTORS };

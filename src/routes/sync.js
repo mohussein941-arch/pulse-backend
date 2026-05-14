@@ -8,8 +8,25 @@ const express  = require("express");
 const supabase = require("../supabase");
 const { CONNECTORS } = require("../connectors");
 const { calcHealth  } = require("../health");
+const { encrypt, decrypt } = require("../utils/crypto");
 
 const router = express.Router();
+
+const encryptCreds = creds => {
+  const out = {};
+  for (const [k, v] of Object.entries(creds || {})) {
+    out[k] = v ? encrypt(String(v)) : null;
+  }
+  return out;
+};
+
+const decryptCreds = creds => {
+  const out = {};
+  for (const [k, v] of Object.entries(creds || {})) {
+    out[k] = v ? decrypt(v) : null;
+  }
+  return out;
+};
 
 // ── GET /api/sync/status ──────────────────────────────────────────────────────
 router.get("/status", async (req, res, next) => {
@@ -30,7 +47,7 @@ router.post("/configure", async (req, res, next) => {
     const { error } = await supabase.from("integrations").upsert({
       user_id:      req.userId,
       connector_id: connectorId,
-      credentials:  credentials || {},
+      credentials:  encryptCreds(credentials || {}),
       field_map:    fieldMap    || {},
       connected:    connected   ?? false,
       updated_at:   new Date().toISOString(),
@@ -48,7 +65,7 @@ router.post("/test", async (req, res, next) => {
     const connector = CONNECTORS[connectorId];
     if (!connector) return res.status(400).json({ error: `Unknown connector: ${connectorId}` });
 
-    await connector(credentials, {}).catch(err => {
+    await connector(decryptCreds(credentials || {}), {}).catch(err => {
       throw new Error(`Connection failed: ${err.response?.data?.message || err.message}`);
     });
 
@@ -82,9 +99,7 @@ router.post("/run", async (req, res, next) => {
     let created = 0, updated = 0, skipped = 0;
     const errors = [];
 
-    const creds = integration.oauth_token
-      ? { ...integration.credentials, accessToken: integration.oauth_token }
-      : integration.credentials;
+    const creds = decryptCreds(integration.credentials || {});
 
     const records = await connector(creds, integration.field_map || {});
 
