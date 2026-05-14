@@ -112,6 +112,15 @@ router.post('/digests', async (req, res, next) => {
     const { account_id, frequency, auto_send } = req.body;
     if (!account_id) return res.status(400).json({ error: 'account_id is required' });
 
+    // Verify the account belongs to this user before creating a schedule for it
+    const { data: acct } = await supabase
+      .from('accounts')
+      .select('id')
+      .eq('id', account_id)
+      .eq('user_id', req.userId)
+      .maybeSingle();
+    if (!acct) return res.status(403).json({ error: 'Account not found' });
+
     const { data, error } = await supabase
       .from('digest_schedules')
       .insert({
