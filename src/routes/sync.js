@@ -181,6 +181,23 @@ router.post("/run", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── PATCH /api/sync/field-map ─────────────────────────────────────────────────
+router.patch("/field-map", async (req, res, next) => {
+  try {
+    const { connectorId, fieldMap } = req.body;
+    if (!connectorId) return res.status(400).json({ error: "connectorId is required" });
+
+    const { error } = await supabase
+      .from("integrations")
+      .update({ field_map: fieldMap || {}, updated_at: new Date().toISOString() })
+      .eq("org_id", req.orgId)
+      .eq("connector_id", connectorId);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
 // ── GET /api/sync/log/:connectorId ────────────────────────────────────────────
 router.get("/log/:connectorId", async (req, res, next) => {
   try {
