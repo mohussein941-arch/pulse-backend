@@ -229,12 +229,18 @@ create index if not exists idx_automation_log_org on automation_log(org_id);
 -- ══ PHASE 2 — run AFTER new backend is confirmed healthy ══════════════════════
 
 -- ── Step 8: Rename user_id → created_by on all 17 Tier B tables ──────────────
+-- STEP 8 DEFERRED: rename of user_id → created_by on Tier B tables is deferred
+-- to a later cleanup pass. The backend code currently INSERTs user_id; running
+-- this rename would break those INSERTs without a coordinated second deploy.
+-- After M0b, user_id on Tier B tables semantically represents the row's author,
+-- not its owner. Document this in the codebase.
+--
+-- Original Step 8 notes (preserved for reference):
 -- The FK to auth.users(id) survives the rename — Postgres preserves constraints.
 -- Alert emails and task assignments continue to use this column as the recipient.
--- VERIFY TABLE NAME for automation_rules before running.
--- IMPORTANT: Deploy the new backend BEFORE running this step. The backend code
--- uses 'created_by' in all Tier B INSERTs — this step makes those INSERTs valid.
+-- IMPORTANT: Deploy a backend update using 'created_by' BEFORE running this step.
 
+/*
 alter table accounts         rename column user_id to created_by;
 alter table ces_history      rename column user_id to created_by;
 alter table health_history   rename column user_id to created_by;
@@ -250,6 +256,6 @@ alter table onboarding_tasks rename column user_id to created_by;
 alter table usage_history    rename column user_id to created_by;
 alter table churn_events     rename column user_id to created_by;
 alter table integrations     rename column user_id to created_by;
--- Table name confirmed: automation_rules
 alter table automation_rules rename column user_id to created_by;
 alter table automation_log   rename column user_id to created_by;
+*/
