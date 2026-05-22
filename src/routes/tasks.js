@@ -1,4 +1,5 @@
 // routes/tasks.js — manual CSM tasks (account-linked or standalone)
+// M0b: all queries scoped to req.orgId; user_id kept for created_by audit trail
 
 const express  = require('express');
 const router   = express.Router();
@@ -6,13 +7,13 @@ const supabase = require('../supabase');
 const { schemas, validate, validateUuidParam } = require('../utils/validate');
 const { audit } = require('../middleware/audit');
 
-// GET /api/tasks — all tasks for this user
+// GET /api/tasks — all tasks for this org
 router.get('/', async (req, res, next) => {
   try {
     const { data, error } = await supabase
       .from('tasks')
       .select('*')
-      .eq('user_id', req.userId)
+      .eq('org_id', req.orgId)
       .order('due_date', { ascending: true, nullsFirst: false });
 
     if (error) throw error;
@@ -28,7 +29,9 @@ router.post('/', validate(schemas.taskCreate), async (req, res, next) => {
     const { data, error } = await supabase
       .from('tasks')
       .insert({
+        // user_id renamed to created_by in Phase 2 (Step 8); keep user_id until then
         user_id:     req.userId,
+        org_id:      req.orgId,
         account_id:  accountId || null,
         title,
         description: description || null,
@@ -57,7 +60,7 @@ router.patch('/:id', validateUuidParam('id'), validate(schemas.taskUpdate), asyn
       .from('tasks')
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', req.params.id)
-      .eq('user_id', req.userId)
+      .eq('org_id', req.orgId)
       .select().single();
 
     if (error) throw error;
@@ -74,7 +77,7 @@ router.delete('/:id', validateUuidParam('id'), async (req, res, next) => {
       .from('tasks')
       .delete()
       .eq('id', req.params.id)
-      .eq('user_id', req.userId);
+      .eq('org_id', req.orgId);
 
     if (error) throw error;
     audit(req.userId, 'task.deleted', { resourceType: 'task', resourceId: req.params.id, req });
