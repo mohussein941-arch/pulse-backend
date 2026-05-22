@@ -6,7 +6,7 @@
 --
 -- IMPORTANT: Verify table names before running.
 -- The application code uses 'automation_rules' and 'automation_log'.
--- Steps 3, 4, 5, 7, and 8 reference 'automations' — update to 'automation_rules'
+-- Steps 3, 4, 5, 7, and 8 reference 'automation_rules' — update to 'automation_rules'
 -- if that is the actual Supabase table name (run the query below to verify):
 --   SELECT tablename FROM pg_tables
 --   WHERE schemaname = 'public' AND tablename LIKE 'automat%';
@@ -14,7 +14,7 @@
 -- Tier B tables (17): accounts, ces_history, health_history, activity_log,
 --   milestones, stakeholders, playbooks, tasks, surveys, survey_responses,
 --   onboarding_plans, onboarding_tasks, usage_history, churn_events,
---   integrations, automations (or automation_rules), automation_log
+--   integrations, automation_rules, automation_log
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- ══ PHASE 1 ══════════════════════════════════════════════════════════════════
@@ -54,7 +54,7 @@ $$;
 
 -- ── Step 3: Add org_id FK to all 17 Tier B tables ────────────────────────────
 -- Nullable initially — Step 5 sets NOT NULL after backfill.
--- NOTE: Replace 'automations' with 'automation_rules' if that is the actual table name.
+-- NOTE: Table name confirmed as 'automation_rules'.
 
 alter table accounts         add column if not exists org_id uuid references organizations(id) on delete cascade;
 alter table ces_history      add column if not exists org_id uuid references organizations(id) on delete cascade;
@@ -71,7 +71,7 @@ alter table onboarding_tasks add column if not exists org_id uuid references org
 alter table usage_history    add column if not exists org_id uuid references organizations(id) on delete cascade;
 alter table churn_events     add column if not exists org_id uuid references organizations(id) on delete cascade;
 alter table integrations     add column if not exists org_id uuid references organizations(id) on delete cascade;
--- VERIFY TABLE NAME: automation_rules or automations?
+-- Table name confirmed: automation_rules
 alter table automation_rules add column if not exists org_id uuid references organizations(id) on delete cascade;
 alter table automation_log   add column if not exists org_id uuid references organizations(id) on delete cascade;
 
@@ -184,7 +184,7 @@ drop policy if exists "surveys_own"        on surveys;
 drop policy if exists "onboarding_own"     on onboarding_plans;
 drop policy if exists "integrations_own"   on integrations;
 drop policy if exists "churn_own"          on churn_events;
-drop policy if exists "automations_own"    on automations;
+drop policy if exists "automation_rules_own"    on automation_rules;
 drop policy if exists "automation_log_own" on automation_log;
 
 create policy "accounts_org"       on accounts         using (org_id = current_org_id()) with check (org_id = current_org_id());
@@ -200,7 +200,7 @@ create policy "onboarding_org"     on onboarding_plans  using (org_id = current_
 create policy "integrations_org"   on integrations      using (org_id = current_org_id()) with check (org_id = current_org_id());
 create policy "churn_org"          on churn_events      using (org_id = current_org_id()) with check (org_id = current_org_id());
 -- VERIFY TABLE NAME for automation policies:
-create policy "automations_org"    on automation_rules  using (org_id = current_org_id()) with check (org_id = current_org_id());
+create policy "automation_rules_org"    on automation_rules  using (org_id = current_org_id()) with check (org_id = current_org_id());
 create policy "automation_log_org" on automation_log    using (org_id = current_org_id()) with check (org_id = current_org_id());
 
 -- survey_responses: add RLS enable if rowsecurity = false (verify in Part A3)
@@ -222,7 +222,7 @@ create index if not exists idx_tasks_org          on tasks(org_id);
 create index if not exists idx_integrations_org   on integrations(org_id);
 create index if not exists idx_churn_org          on churn_events(org_id, churned_at desc);
 -- VERIFY TABLE NAME:
-create index if not exists idx_automations_org    on automation_rules(org_id);
+create index if not exists idx_automation_rules_org    on automation_rules(org_id);
 create index if not exists idx_automation_log_org on automation_log(org_id);
 
 
@@ -250,6 +250,6 @@ alter table onboarding_tasks rename column user_id to created_by;
 alter table usage_history    rename column user_id to created_by;
 alter table churn_events     rename column user_id to created_by;
 alter table integrations     rename column user_id to created_by;
--- VERIFY TABLE NAME:
+-- Table name confirmed: automation_rules
 alter table automation_rules rename column user_id to created_by;
 alter table automation_log   rename column user_id to created_by;
