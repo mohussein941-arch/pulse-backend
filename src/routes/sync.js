@@ -1,7 +1,7 @@
 /**
- * Sync routes — all integration configs and sync operations scoped to req.userId.
- * Each CSM has their own integration connections — Ahmed's HubSpot credentials
- * are completely separate from Sara's.
+ * Sync routes — M0b: integrations scoped to req.orgId (one CRM per org).
+ * Account writes also use org_id. Credential lookup (within run) still
+ * validates by org to prevent cross-org credential access.
  */
 
 const express  = require("express");
@@ -32,7 +32,7 @@ const decryptCreds = creds => {
 router.get("/status", async (req, res, next) => {
   try {
     const { data, error } = await supabase
-      .from("integrations").select("*").eq("user_id", req.userId);
+      .from("integrations").select("*").eq("org_id", req.orgId);
     if (error) throw error;
     res.json({ integrations: data || [] });
   } catch (err) { next(err); }
@@ -45,13 +45,15 @@ router.post("/configure", async (req, res, next) => {
     if (!connectorId) return res.status(400).json({ error: "connectorId is required" });
 
     const { error } = await supabase.from("integrations").upsert({
+      // user_id renamed to created_by in Phase 2 (Step 8); keep user_id until then
       user_id:      req.userId,
+      org_id:       req.orgId,
       connector_id: connectorId,
       credentials:  encryptCreds(credentials || {}),
       field_map:    fieldMap    || {},
       connected:    connected   ?? false,
       updated_at:   new Date().toISOString(),
-    }, { onConflict: "user_id,connector_id" });
+    }, { onConflict: "org_id,connector_id" });
 
     if (error) throw error;
     res.json({ success: true });
@@ -81,9 +83,10 @@ router.post("/run", async (req, res, next) => {
     const { connectorId } = req.body;
     if (!connectorId) return res.status(400).json({ error: "connectorId is required" });
 
+    // Fetch integration by org scope (Q1: one connector per org)
     const { data: integration, error: fetchErr } = await supabase
       .from("integrations").select("*")
-      .eq("user_id", req.userId).eq("connector_id", connectorId).single();
+      .eq("org_id", req.orgId).eq("connector_id", connectorId).single();
 
     if (fetchErr || !integration) {
       return res.status(404).json({ error: `Integration not found: ${connectorId}` });
@@ -107,7 +110,7 @@ router.post("/run", async (req, res, next) => {
       try {
         const { data: existing } = await supabase
           .from("accounts").select("id, open_tickets, last_contact")
-          .eq("user_id", req.userId)
+          .eq("org_id", req.orgId)
           .eq("external_id", record.externalId)
           .eq("source", record.source)
           .maybeSingle();
@@ -119,7 +122,9 @@ router.post("/run", async (req, res, next) => {
         });
 
         const row = {
+          // user_id renamed to created_by in Phase 2 (Step 8); keep user_id until then
           user_id:      req.userId,
+          org_id:       req.orgId,
           name:         record.name,
           industry:     record.industry || "",
           arr:          record.arr || 0,
@@ -138,7 +143,7 @@ router.post("/run", async (req, res, next) => {
           if (existing.open_tickets !== record.openTickets
             || existing.last_contact !== record.lastContact) {
             await supabase.from("accounts").update(row)
-              .eq("id", existing.id).eq("user_id", req.userId);
+              .eq("id", existing.id).eq("org_id", req.orgId);
             updated++;
           } else {
             skipped++;
@@ -157,7 +162,7 @@ router.post("/run", async (req, res, next) => {
     await supabase.from("integrations").update({
       last_sync:  new Date().toISOString(),
       sync_count: (integration.sync_count || 0) + created + updated,
-    }).eq("user_id", req.userId).eq("connector_id", connectorId);
+    }).eq("org_id", req.orgId).eq("connector_id", connectorId);
 
     // Write sync log
     await supabase.from("sync_log").insert({
