@@ -1,0 +1,55 @@
+-- ── Pre-migration data inventory (Section 9.1) ───────────────────────────────
+-- Run in Supabase SQL Editor on STAGING project before executing migration_m0b.sql
+-- Save the output of each query here before proceeding.
+
+-- Query 1: Row counts per Tier B table
+select
+  'accounts'         as tbl, count(*) from accounts         union all
+  select 'ces_history',      count(*) from ces_history       union all
+  select 'health_history',   count(*) from health_history    union all
+  select 'activity_log',     count(*) from activity_log      union all
+  select 'milestones',       count(*) from milestones        union all
+  select 'stakeholders',     count(*) from stakeholders      union all
+  select 'tasks',            count(*) from tasks             union all
+  select 'surveys',          count(*) from surveys           union all
+  select 'survey_responses', count(*) from survey_responses  union all
+  select 'onboarding_plans', count(*) from onboarding_plans  union all
+  select 'onboarding_tasks', count(*) from onboarding_tasks  union all
+  select 'usage_history',    count(*) from usage_history     union all
+  select 'churn_events',     count(*) from churn_events      union all
+  select 'integrations',     count(*) from integrations      union all
+  select 'automation_rules', count(*) from automation_rules  union all
+  select 'automation_log',   count(*) from automation_log
+order by tbl;
+
+-- Query 2: Count of auth.users (how many users will get personal orgs)
+select count(*) as total_users from auth.users;
+
+-- Query 3: Verify actual automation table name
+select tablename from pg_tables
+where schemaname = 'public' and tablename like 'automat%';
+
+-- ── RESULTS (fill in after running) ──────────────────────────────────────────
+-- Date/time: ___________________
+-- Staging project ref: ___________________
+--
+-- Table row counts:
+-- accounts:          ___
+-- ces_history:       ___
+-- health_history:    ___
+-- activity_log:      ___
+-- milestones:        ___
+-- stakeholders:      ___
+-- tasks:             ___
+-- surveys:           ___
+-- survey_responses:  ___
+-- onboarding_plans:  ___
+-- onboarding_tasks:  ___
+-- usage_history:     ___
+-- churn_events:      ___
+-- integrations:      ___
+-- automation_rules:  ___  (or 'automations' — see Query 3 result)
+-- automation_log:    ___
+--
+-- Total auth.users:  ___
+-- Automation table name in Supabase: ___________________
