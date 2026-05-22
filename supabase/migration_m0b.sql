@@ -11,10 +11,11 @@
 --   SELECT tablename FROM pg_tables
 --   WHERE schemaname = 'public' AND tablename LIKE 'automat%';
 --
--- Tier B tables (17): accounts, ces_history, health_history, activity_log,
---   milestones, stakeholders, playbooks, tasks, surveys, survey_responses,
+-- Tier B tables (16): accounts, ces_history, health_history, activity_log,
+--   milestones, stakeholders, tasks, surveys, survey_responses,
 --   onboarding_plans, onboarding_tasks, usage_history, churn_events,
 --   integrations, automation_rules, automation_log
+-- NOTE: playbooks removed — stored as JSONB columns on accounts, not a standalone table.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- ══ PHASE 1 ══════════════════════════════════════════════════════════════════
@@ -52,9 +53,10 @@ as $$
   select org_id from org_members where user_id = auth.uid() limit 1;
 $$;
 
--- ── Step 3: Add org_id FK to all 17 Tier B tables ────────────────────────────
+-- ── Step 3: Add org_id FK to all 16 Tier B tables ────────────────────────────
 -- Nullable initially — Step 5 sets NOT NULL after backfill.
 -- NOTE: Table name confirmed as 'automation_rules'.
+-- NOTE: playbooks removed — playbooks are JSONB columns on accounts, not a standalone table.
 
 alter table accounts         add column if not exists org_id uuid references organizations(id) on delete cascade;
 alter table ces_history      add column if not exists org_id uuid references organizations(id) on delete cascade;
@@ -62,7 +64,6 @@ alter table health_history   add column if not exists org_id uuid references org
 alter table activity_log     add column if not exists org_id uuid references organizations(id) on delete cascade;
 alter table milestones       add column if not exists org_id uuid references organizations(id) on delete cascade;
 alter table stakeholders     add column if not exists org_id uuid references organizations(id) on delete cascade;
-alter table playbooks        add column if not exists org_id uuid references organizations(id) on delete cascade;
 alter table tasks            add column if not exists org_id uuid references organizations(id) on delete cascade;
 alter table surveys          add column if not exists org_id uuid references organizations(id) on delete cascade;
 alter table survey_responses add column if not exists org_id uuid references organizations(id) on delete cascade;
@@ -111,7 +112,6 @@ begin
     update activity_log     set org_id = new_org_id where user_id = r.user_id;
     update milestones       set org_id = new_org_id where user_id = r.user_id;
     update stakeholders     set org_id = new_org_id where user_id = r.user_id;
-    update playbooks        set org_id = new_org_id where user_id = r.user_id;
     update tasks            set org_id = new_org_id where user_id = r.user_id;
     update surveys          set org_id = new_org_id where user_id = r.user_id;
     update survey_responses set org_id = new_org_id where user_id = r.user_id;
@@ -127,9 +127,9 @@ begin
 end;
 $$;
 
--- ── Step 5: Set org_id NOT NULL on all 17 Tier B tables ──────────────────────
+-- ── Step 5: Set org_id NOT NULL on all 16 Tier B tables ──────────────────────
 -- Applied uniformly. Safe because Step 4 backfilled every row.
--- NOTE: Replace 'automation_rules' with actual table name if different.
+-- NOTE: playbooks removed — not a standalone table.
 
 alter table accounts         alter column org_id set not null;
 alter table ces_history      alter column org_id set not null;
@@ -137,7 +137,6 @@ alter table health_history   alter column org_id set not null;
 alter table activity_log     alter column org_id set not null;
 alter table milestones       alter column org_id set not null;
 alter table stakeholders     alter column org_id set not null;
-alter table playbooks        alter column org_id set not null;
 alter table tasks            alter column org_id set not null;
 alter table surveys          alter column org_id set not null;
 alter table survey_responses alter column org_id set not null;
@@ -164,7 +163,7 @@ alter table integrations
   add constraint integrations_org_id_connector_id_key
   unique (org_id, connector_id);
 
--- ── Step 7: Update RLS policies on all 17 Tier B tables ──────────────────────
+-- ── Step 7: Update RLS policies on all 16 Tier B tables ──────────────────────
 -- Run Part A3 query first to check which tables need RLS enabled:
 --   select tablename, rowsecurity from pg_tables
 --   where schemaname = 'public' and tablename in ('survey_responses', 'onboarding_tasks');
@@ -178,7 +177,6 @@ drop policy if exists "health_own"         on health_history;
 drop policy if exists "activity_own"       on activity_log;
 drop policy if exists "milestones_own"     on milestones;
 drop policy if exists "stakeholders_own"   on stakeholders;
-drop policy if exists "playbooks_own"      on playbooks;
 drop policy if exists "tasks_own"          on tasks;
 drop policy if exists "surveys_own"        on surveys;
 drop policy if exists "onboarding_own"     on onboarding_plans;
@@ -193,7 +191,6 @@ create policy "health_org"         on health_history    using (org_id = current_
 create policy "activity_org"       on activity_log      using (org_id = current_org_id()) with check (org_id = current_org_id());
 create policy "milestones_org"     on milestones        using (org_id = current_org_id()) with check (org_id = current_org_id());
 create policy "stakeholders_org"   on stakeholders      using (org_id = current_org_id()) with check (org_id = current_org_id());
-create policy "playbooks_org"      on playbooks         using (org_id = current_org_id()) with check (org_id = current_org_id());
 create policy "tasks_org"          on tasks             using (org_id = current_org_id()) with check (org_id = current_org_id());
 create policy "surveys_org"        on surveys           using (org_id = current_org_id()) with check (org_id = current_org_id());
 create policy "onboarding_org"     on onboarding_plans  using (org_id = current_org_id()) with check (org_id = current_org_id());
