@@ -34,11 +34,19 @@ const applyFieldMap = (record, fieldMap) => {
   return result;
 };
 
+// Derive the correct HubSpot API base from the token prefix.
+// pat-eu1-... → EU region; everything else defaults to US.
+// OAuth token-exchange endpoints (api.hubapi.com/oauth/v1/token) are NOT
+// region-specific and must NOT use this helper.
+const hubspotBase = (apiKey = "") =>
+  apiKey.startsWith("pat-eu1") ? "https://api-eu1.hubapi.com" : "https://api.hubapi.com";
+
 // ─── HubSpot ──────────────────────────────────────────────────────────────────
 const fetchHubSpot = async ({ apiKey, portalId }, fieldMap) => {
+  const base       = hubspotBase(apiKey);
   const properties = Object.keys(fieldMap).join(",");
   const res = await axios.get(
-    `https://api.hubapi.com/crm/v3/objects/companies?properties=${properties}&limit=100`,
+    `${base}/crm/v3/objects/companies?properties=${properties}&limit=100`,
     { headers: { Authorization: `Bearer ${apiKey}` } }
   );
   return (res.data.results || []).map(r => {
@@ -387,9 +395,10 @@ const fetchServiceNow = async ({ instanceUrl, username, password }, fieldMap) =>
 
 // ─── HubSpot Service Hub ──────────────────────────────────────────────────────
 const fetchHubSpotService = async ({ apiKey, portalId }, fieldMap) => {
+  const base = hubspotBase(apiKey);
   // Group open tickets by company association
   const res = await axios.get(
-    "https://api.hubapi.com/crm/v3/objects/tickets?properties=hs_pipeline_stage,subject,hs_ticket_priority&associations=company&limit=100&filters=hs_pipeline_stage:neq:4",
+    `${base}/crm/v3/objects/tickets?properties=hs_pipeline_stage,subject,hs_ticket_priority&associations=company&limit=100&filters=hs_pipeline_stage:neq:4`,
     { headers: { Authorization: `Bearer ${apiKey}` } }
   );
 
@@ -409,7 +418,7 @@ const fetchHubSpotService = async ({ apiKey, portalId }, fieldMap) => {
   for (const id of companyIds.slice(0, 50)) {
     try {
       const c = await axios.get(
-        `https://api.hubapi.com/crm/v3/objects/companies/${id}?properties=name`,
+        `${base}/crm/v3/objects/companies/${id}?properties=name`,
         { headers: { Authorization: `Bearer ${apiKey}` } }
       );
       companies.push({

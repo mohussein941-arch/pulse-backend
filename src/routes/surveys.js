@@ -1,8 +1,9 @@
 /**
  * Survey routes (protected — CSM only)
+ * M0b: all queries scoped to req.orgId; user_id kept for created_by audit trail
  *
  * POST /api/surveys          — create a new survey
- * GET  /api/surveys          — list all surveys for this user
+ * GET  /api/surveys          — list all surveys for this org
  * GET  /api/surveys/:id      — get one survey with responses
  * PATCH /api/surveys/:id     — update status (close)
  * DELETE /api/surveys/:id    — delete survey
@@ -30,7 +31,9 @@ router.post("/", async (req, res, next) => {
     }
 
     const { data, error } = await supabase.from("surveys").insert({
+      // user_id renamed to created_by in Phase 2 (Step 8); keep user_id until then
       user_id:         req.userId,
+      org_id:          req.orgId,
       account_id:      accountId || null,
       account_name:    accountName,
       type,
@@ -54,7 +57,7 @@ router.get("/", async (req, res, next) => {
     const { data: surveys, error } = await supabase
       .from("surveys")
       .select(`*, survey_responses ( id, score, custom_answer, respondent_name, submitted_at )`)
-      .eq("user_id", req.userId)
+      .eq("org_id", req.orgId)
       .order("created_at", { ascending: false });
 
     if (error) throw error;
@@ -94,7 +97,7 @@ router.patch("/:id", async (req, res, next) => {
     const { error } = await supabase.from("surveys")
       .update({ status })
       .eq("id", req.params.id)
-      .eq("user_id", req.userId);
+      .eq("org_id", req.orgId);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) { next(err); }
@@ -104,7 +107,7 @@ router.patch("/:id", async (req, res, next) => {
 router.delete("/:id", async (req, res, next) => {
   try {
     const { error } = await supabase.from("surveys")
-      .delete().eq("id", req.params.id).eq("user_id", req.userId);
+      .delete().eq("id", req.params.id).eq("org_id", req.orgId);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) { next(err); }
@@ -120,9 +123,9 @@ router.post("/:id/send", async (req, res, next) => {
     const { recipientEmail, recipientName, customMessage } = req.body;
     if (!recipientEmail) return res.status(400).json({ error: "recipientEmail is required" });
 
-    // Fetch the survey
+    // Fetch the survey (scoped to this org)
     const { data: survey, error: fetchErr } = await supabase
-      .from("surveys").select("*").eq("id", req.params.id).eq("user_id", req.userId).single();
+      .from("surveys").select("*").eq("id", req.params.id).eq("org_id", req.orgId).single();
     if (fetchErr || !survey) return res.status(404).json({ error: "Survey not found" });
 
     const link = `${BASE_URL()}/survey/${survey.token}`;
@@ -159,6 +162,7 @@ router.post("/:id/send", async (req, res, next) => {
     if (survey.account_id) {
       await supabase.from("activity_log").insert({
         user_id:    req.userId,
+        org_id:     req.orgId,
         account_id: survey.account_id,
         type:       "Email",
         note:       `${survey.type} survey sent to ${recipientEmail}`,

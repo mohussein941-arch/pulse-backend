@@ -1,5 +1,7 @@
 // routes/onboarding.js
 // Onboarding plans, tasks, and account needs — all optional per account
+// M0b: onboarding_plans and onboarding_tasks scoped to req.orgId.
+// account_needs is NOT in Tier B — stays user-scoped (user_id).
 
 const express  = require('express');
 const router   = express.Router();
@@ -25,7 +27,7 @@ router.get('/all', async (req, res) => {
   const { data: plans, error } = await supabase
     .from('onboarding_plans')
     .select('*')
-    .eq('user_id', req.userId)
+    .eq('org_id', req.orgId)
     .eq('status', 'active')
     .order('created_at', { ascending: false });
 
@@ -64,7 +66,7 @@ router.get('/account/:accountId', async (req, res) => {
 
   const [planRes, needsRes] = await Promise.all([
     supabase.from('onboarding_plans').select('*')
-      .eq('user_id', req.userId).eq('account_id', accountId)
+      .eq('org_id', req.orgId).eq('account_id', accountId)
       .eq('status', 'active').maybeSingle(),
     supabase.from('account_needs').select('*')
       .eq('user_id', req.userId).eq('account_id', accountId)
@@ -95,7 +97,9 @@ router.post('/plan', async (req, res) => {
   const { data, error } = await supabase
     .from('onboarding_plans')
     .insert({
-      user_id:       req.userId,
+      // user_id renamed to created_by in Phase 2 (Step 8); keep user_id until then
+      user_id:        req.userId,
+      org_id:         req.orgId,
       account_id,
       go_live_target: go_live_target || null,
       phases:         DEFAULT_PHASES,
@@ -120,7 +124,7 @@ router.patch('/plan/:id', async (req, res) => {
     .from('onboarding_plans')
     .update(updates)
     .eq('id', req.params.id)
-    .eq('user_id', req.userId)
+    .eq('org_id', req.orgId)
     .select().single();
   if (error) return res.status(500).json({ error: error.message });
   if (!data)  return res.status(404).json({ error: 'Plan not found' });
@@ -132,7 +136,7 @@ router.delete('/plan/:id', async (req, res) => {
     .from('onboarding_plans')
     .delete()
     .eq('id', req.params.id)
-    .eq('user_id', req.userId);
+    .eq('org_id', req.orgId);
   if (error) return res.status(500).json({ error: error.message });
   res.status(204).send();
 });
@@ -144,7 +148,11 @@ router.post('/tasks', async (req, res) => {
 
   const { data, error } = await supabase
     .from('onboarding_tasks')
-    .insert({ user_id: req.userId, plan_id, account_id, title, owner, due_date: due_date || null, sort_order })
+    .insert({
+      // user_id renamed to created_by in Phase 2 (Step 8); keep user_id until then
+      user_id: req.userId, org_id: req.orgId,
+      plan_id, account_id, title, owner, due_date: due_date || null, sort_order,
+    })
     .select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json(data);
@@ -160,7 +168,7 @@ router.patch('/tasks/:id', async (req, res) => {
     .from('onboarding_tasks')
     .update(updates)
     .eq('id', req.params.id)
-    .eq('user_id', req.userId)
+    .eq('org_id', req.orgId)
     .select().single();
   if (error) return res.status(500).json({ error: error.message });
   if (!data)  return res.status(404).json({ error: 'Task not found' });
@@ -170,12 +178,12 @@ router.patch('/tasks/:id', async (req, res) => {
 router.delete('/tasks/:id', async (req, res) => {
   const { error } = await supabase
     .from('onboarding_tasks').delete()
-    .eq('id', req.params.id).eq('user_id', req.userId);
+    .eq('id', req.params.id).eq('org_id', req.orgId);
   if (error) return res.status(500).json({ error: error.message });
   res.status(204).send();
 });
 
-// ─── Account needs ────────────────────────────────────────────────────────────
+// ─── Account needs — Tier A: stays user-scoped (not in M0b Tier B list) ──────
 router.post('/needs', async (req, res) => {
   const { account_id, category = 'business', description, priority = 'medium' } = req.body;
   if (!account_id || !description) return res.status(400).json({ error: 'account_id and description are required' });
@@ -218,20 +226,20 @@ router.post('/plan/:id/send-handover', async (req, res) => {
   const { sales_email } = req.body;
   if (!sales_email) return res.status(400).json({ error: 'sales_email is required' });
 
-  // Verify ownership
+  // Verify org ownership
   const { data: plan, error: planErr } = await supabase
-    .from('onboarding_plans').select('id, user_id, handover_token, handover_data, account_id')
-    .eq('id', id).eq('user_id', req.userId).single();
+    .from('onboarding_plans').select('id, org_id, handover_token, handover_data, account_id')
+    .eq('id', id).eq('org_id', req.orgId).single();
   if (planErr || !plan) return res.status(404).json({ error: 'Plan not found' });
 
   const token = plan.handover_token || crypto.randomBytes(24).toString('hex');
 
   const { error } = await supabase.from('onboarding_plans').update({
-    handover_token:      token,
+    handover_token:       token,
     handover_sales_email: sales_email,
-    handover_status:     'sent',
-    handover_sent_at:    new Date().toISOString(),
-  }).eq('id', id).eq('user_id', req.userId);
+    handover_status:      'sent',
+    handover_sent_at:     new Date().toISOString(),
+  }).eq('id', id).eq('org_id', req.orgId);
 
   if (error) return res.status(500).json({ error: error.message });
 

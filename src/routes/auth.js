@@ -3,8 +3,8 @@
  * Supabase handles the heavy lifting: password hashing, JWT generation,
  * email verification, session management.
  *
- * POST /auth/signup   — create a new CSM account
- * POST /auth/login    — sign in, returns JWT
+ * POST /auth/signup   — create a new CSM account + personal org
+ * POST /auth/login    — sign in, returns JWT + orgId
  * POST /auth/logout   — invalidate session
  * GET  /auth/profile  — get current user's profile
  * PATCH /auth/profile — update name, company
@@ -16,14 +16,6 @@ const supabase  = require("../supabase");
 const { requireApiKey, requireUser } = require("../middleware/auth");
 
 const router = express.Router();
-
-// Helper — user-scoped Supabase client (uses anon key + user JWT)
-const userClient = (token) => createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY,
-  { auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { Authorization: `Bearer ${token}` } } }
-);
 
 // ── POST /auth/signup ─────────────────────────────────────────────────────────
 router.post("/signup", requireApiKey, async (req, res, next) => {
@@ -54,10 +46,32 @@ router.post("/signup", requireApiKey, async (req, res, next) => {
       }).eq("id", data.user.id);
     }
 
+    // M0b: create a personal org for this user and make them the owner.
+    // Every signup creates a new org — no invite flow or domain matching in this milestone.
+    const orgName = company || email.split("@")[0];
+    const { data: org, error: orgErr } = await supabase
+      .from("organizations")
+      .insert({ name: orgName })
+      .select("id")
+      .single();
+
+    if (orgErr) throw orgErr;
+
+    await supabase.from("org_members").insert({
+      org_id:  org.id,
+      user_id: data.user.id,
+      role:    "owner",
+    });
+
+    await supabase.from("profiles")
+      .update({ org_id: org.id })
+      .eq("id", data.user.id);
+
     res.status(201).json({
       message: "Account created successfully",
-      userId: data.user.id,
-      email:  data.user.email,
+      userId:  data.user.id,
+      email:   data.user.email,
+      orgId:   org.id,
     });
   } catch (err) {
     if (err.message?.includes("already registered")) {
@@ -89,12 +103,20 @@ router.post("/login", requireApiKey, async (req, res, next) => {
       return res.status(401).json({ error: "Invalid email or password" });
     }
 
-    // Fetch profile
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("full_name, company, role")
-      .eq("id", data.user.id)
-      .single();
+    // Fetch profile and org membership in parallel
+    const [profileRes, membershipRes] = await Promise.all([
+      supabase.from("profiles")
+        .select("full_name, company, role")
+        .eq("id", data.user.id)
+        .single(),
+      supabase.from("org_members")
+        .select("org_id, role")
+        .eq("user_id", data.user.id)
+        .maybeSingle(),
+    ]);
+
+    const profile    = profileRes.data;
+    const membership = membershipRes.data;
 
     res.json({
       token:        data.session.access_token,
@@ -104,8 +126,10 @@ router.post("/login", requireApiKey, async (req, res, next) => {
         id:       data.user.id,
         email:    data.user.email,
         fullName: profile?.full_name || "",
-        company:  profile?.company  || "",
-        role:     profile?.role     || "csm",
+        company:  profile?.company   || "",
+        role:     profile?.role      || "csm",
+        orgId:    membership?.org_id || null,
+        orgRole:  membership?.role   || null,
       },
     });
   } catch (err) {

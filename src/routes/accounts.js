@@ -1,8 +1,8 @@
 /**
- * Accounts routes — all queries scoped to req.userId.
- * Ahmed from Microsoft only ever touches Ahmed's rows.
- * Sara from Noon only ever touches Sara's rows.
- * The database RLS policies enforce this as a second layer of protection.
+ * Accounts routes — M0b: all queries scoped to req.orgId (org scope).
+ * req.userId is kept on INSERTs as created_by (column renamed in Phase 2 Step 8;
+ * until then the column is still named user_id in the DB).
+ * RLS on the accounts table enforces org_id = current_org_id() as a second layer.
  */
 
 const express  = require("express");
@@ -24,7 +24,7 @@ router.get("/", async (req, res, next) => {
         activity_log   ( id, type, note, logged_at ),
         milestones     ( id, text, done, sort_order )
       `)
-      .eq("user_id", req.userId)
+      .eq("org_id", req.orgId)
       .eq("archived", false)
       .order("created_at", { ascending: false });
 
@@ -106,7 +106,9 @@ router.post("/", async (req, res, next) => {
     });
 
     const { data, error } = await supabase.from("accounts").insert({
+      // user_id renamed to created_by in Phase 2 (Step 8); keep user_id until then
       user_id:       req.userId,
+      org_id:        req.orgId,
       name:          body.name,
       industry:      body.industry,
       plan:          body.plan || "Starter",
@@ -133,14 +135,14 @@ router.post("/", async (req, res, next) => {
     // Write initial CES history entry
     if (body.ces) {
       await supabase.from("ces_history").insert({
-        user_id: req.userId, account_id: data.id,
+        user_id: req.userId, org_id: req.orgId, account_id: data.id,
         value: body.ces, recorded_at: today,
       });
     }
 
     // Write initial health history entry
     await supabase.from("health_history").insert({
-      user_id: req.userId, account_id: data.id,
+      user_id: req.userId, org_id: req.orgId, account_id: data.id,
       score: healthScore, recorded_at: today,
     });
 
@@ -156,10 +158,10 @@ router.patch("/:id", async (req, res, next) => {
     const { id } = req.params;
     const body   = req.body;
 
-    // Verify ownership before touching anything
+    // Verify org ownership before touching anything
     const { data: existing, error: ownErr } = await supabase
-      .from("accounts").select("id, user_id, nps, ces, product_usage, open_tickets, health_score")
-      .eq("id", id).eq("user_id", req.userId).single();
+      .from("accounts").select("id, org_id, nps, ces, product_usage, open_tickets, health_score")
+      .eq("id", id).eq("org_id", req.orgId).single();
 
     if (ownErr || !existing) {
       return res.status(404).json({ error: "Account not found" });
@@ -210,11 +212,11 @@ router.patch("/:id", async (req, res, next) => {
     if (body.successPlan) {
       if (body.successPlan.goal !== undefined) updates.success_goal = body.successPlan.goal;
       if (body.successPlan.milestones) {
-        await supabase.from("milestones").delete().eq("account_id", id).eq("user_id", req.userId);
+        await supabase.from("milestones").delete().eq("account_id", id).eq("org_id", req.orgId);
         if (body.successPlan.milestones.length > 0) {
           await supabase.from("milestones").insert(
             body.successPlan.milestones.map((m, i) => ({
-              user_id: req.userId, account_id: id,
+              user_id: req.userId, org_id: req.orgId, account_id: id,
               text: m.text, done: m.done || false, sort_order: i,
             }))
           );
@@ -225,7 +227,7 @@ router.patch("/:id", async (req, res, next) => {
     // New CES reading
     if (body.newCesReading) {
       await supabase.from("ces_history").insert({
-        user_id: req.userId, account_id: id,
+        user_id: req.userId, org_id: req.orgId, account_id: id,
         value: body.newCesReading.value,
         recorded_at: body.newCesReading.date || new Date().toISOString().split("T")[0],
       });
@@ -234,9 +236,10 @@ router.patch("/:id", async (req, res, next) => {
     // Write health history snapshot if health changed
     if (newHealthScore !== null) {
       await supabase.from("health_history").insert({
-        user_id:    req.userId,
-        account_id: id,
-        score:      newHealthScore,
+        user_id:     req.userId,
+        org_id:      req.orgId,
+        account_id:  id,
+        score:       newHealthScore,
         recorded_at: new Date().toISOString().split("T")[0],
       });
     }
@@ -244,7 +247,7 @@ router.patch("/:id", async (req, res, next) => {
     // New activity log entry
     if (body.newActivity) {
       await supabase.from("activity_log").insert({
-        user_id: req.userId, account_id: id,
+        user_id: req.userId, org_id: req.orgId, account_id: id,
         type: body.newActivity.type, note: body.newActivity.note,
         logged_at: body.newActivity.date || new Date().toISOString().split("T")[0],
       });
@@ -252,11 +255,11 @@ router.patch("/:id", async (req, res, next) => {
 
     // Stakeholder changes
     if (body.stakeholders) {
-      await supabase.from("stakeholders").delete().eq("account_id", id).eq("user_id", req.userId);
+      await supabase.from("stakeholders").delete().eq("account_id", id).eq("org_id", req.orgId);
       if (body.stakeholders.length > 0) {
         await supabase.from("stakeholders").insert(
           body.stakeholders.map(s => ({
-            user_id: req.userId, account_id: id,
+            user_id: req.userId, org_id: req.orgId, account_id: id,
             name: s.name, title: s.title || "",
             email: s.email || null,
             role: s.role || "Neutral", sentiment: s.sentiment || "Neutral",
@@ -268,7 +271,7 @@ router.patch("/:id", async (req, res, next) => {
 
     if (Object.keys(updates).length > 0) {
       const { error } = await supabase.from("accounts")
-        .update(updates).eq("id", id).eq("user_id", req.userId);
+        .update(updates).eq("id", id).eq("org_id", req.orgId);
       if (error) throw error;
     }
 
@@ -282,7 +285,7 @@ router.patch("/:id", async (req, res, next) => {
 router.delete("/:id", async (req, res, next) => {
   try {
     const { error } = await supabase.from("accounts")
-      .delete().eq("id", req.params.id).eq("user_id", req.userId);
+      .delete().eq("id", req.params.id).eq("org_id", req.orgId);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -305,6 +308,7 @@ router.post("/bulk", async (req, res, next) => {
       });
       return {
         user_id:       req.userId,
+        org_id:        req.orgId,
         name:          body.name,
         domain:        body.domain?.trim().toLowerCase() || null,
         industry:      body.industry || "",
@@ -338,7 +342,7 @@ router.get("/:id/usage-history", async (req, res, next) => {
       .from("usage_history")
       .select("product_usage, active_users, licensed_seats, dau, mau, features_used_count, total_features, sessions_last_30d, recorded_at")
       .eq("account_id", req.params.id)
-      .eq("user_id", req.userId)
+      .eq("org_id", req.orgId)
       .order("recorded_at", { ascending: false })
       .limit(90);
 
@@ -357,7 +361,7 @@ router.get("/churn", async (req, res, next) => {
     const { data, error } = await supabase
       .from("churn_events")
       .select("*")
-      .eq("user_id", req.userId)
+      .eq("org_id", req.orgId)
       .order("churned_at", { ascending: false })
       .limit(50);
 
@@ -375,12 +379,12 @@ router.post("/:id/churn", async (req, res, next) => {
 
     if (!reason) return res.status(400).json({ error: "reason is required" });
 
-    // Verify ownership and get account details
+    // Verify org ownership and get account details
     const { data: account, error: ownErr } = await supabase
       .from("accounts")
-      .select("id, user_id, name, arr")
+      .select("id, org_id, name, arr")
       .eq("id", id)
-      .eq("user_id", req.userId)
+      .eq("org_id", req.orgId)
       .single();
 
     if (ownErr || !account) return res.status(404).json({ error: "Account not found" });
@@ -388,6 +392,7 @@ router.post("/:id/churn", async (req, res, next) => {
     // Log churn event
     const { error: churnErr } = await supabase.from("churn_events").insert({
       user_id:      req.userId,
+      org_id:       req.orgId,
       account_id:   id,
       account_name: account.name,
       arr:          account.arr || 0,
@@ -402,7 +407,7 @@ router.post("/:id/churn", async (req, res, next) => {
       .from("accounts")
       .update({ archived: true })
       .eq("id", id)
-      .eq("user_id", req.userId);
+      .eq("org_id", req.orgId);
     if (archErr) throw archErr;
 
     res.json({ success: true });

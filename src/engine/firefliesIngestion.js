@@ -15,17 +15,18 @@ const TRANSCRIPTS_QUERY = `{
   }
 }`;
 
-async function syncFirefliesForUser(userId) {
+async function syncFirefliesForOrg(orgId) {
   const { data: integration } = await supabase
     .from("integrations")
-    .select("credentials, connected")
-    .eq("user_id", userId)
+    .select("credentials, connected, user_id")
+    .eq("org_id", orgId)
     .eq("connector_id", "fireflies")
     .maybeSingle();
 
   if (!integration?.connected) return { synced: 0, matched: 0 };
 
-  const apiKey = decrypt(integration.credentials.apiKey);
+  const apiKey  = decrypt(integration.credentials.apiKey);
+  const userId  = integration.user_id; // author attribution on created rows
 
   const res = await axios.post(
     FIREFLIES_GQL,
@@ -39,11 +40,11 @@ async function syncFirefliesForUser(userId) {
 
   const transcripts = res.data?.data?.transcripts || [];
 
-  // Build stakeholder email → account_id lookup
+  // Build stakeholder email → account_id lookup (org-scoped)
   const { data: stakeholders } = await supabase
     .from("stakeholders")
     .select("email, account_id")
-    .eq("user_id", userId)
+    .eq("org_id", orgId)
     .not("email", "is", null);
 
   const emailMap = new Map();
@@ -51,14 +52,14 @@ async function syncFirefliesForUser(userId) {
     if (s.email) emailMap.set(s.email.toLowerCase(), s.account_id);
   }
 
-  // Build account domain → account_id lookup
+  // Build account domain → account_id lookup (org-scoped)
   const { data: accounts } = await supabase
     .from("accounts")
     .select("id, domain, last_contact")
-    .eq("user_id", userId)
+    .eq("org_id", orgId)
     .not("domain", "is", null);
 
-  const domainMap = new Map();
+  const domainMap      = new Map();
   const lastContactMap = new Map();
   for (const a of (accounts || [])) {
     if (a.domain) domainMap.set(a.domain.toLowerCase(), a.id);
@@ -88,22 +89,24 @@ async function syncFirefliesForUser(userId) {
       : (t.summary?.action_items || null);
 
     await supabase.from("meeting_notes").upsert({
-      user_id:        userId,
-      account_id:     accountId,
-      fireflies_id:   t.id,
-      title:          t.title || "Untitled meeting",
-      meeting_date:   meetingDate,
-      participants:   t.participants || [],
-      summary:        t.summary?.overview || null,
-      action_items:   actionItems,
+      user_id:         userId,
+      org_id:          orgId,
+      account_id:      accountId,
+      fireflies_id:    t.id,
+      title:           t.title || "Untitled meeting",
+      meeting_date:    meetingDate,
+      participants:    t.participants || [],
+      summary:         t.summary?.overview || null,
+      action_items:    actionItems,
       organizer_email: t.organizer_email || null,
-      synced_at:      new Date().toISOString(),
-    }, { onConflict: "user_id,fireflies_id" });
+      synced_at:       new Date().toISOString(),
+    }, { onConflict: "org_id,fireflies_id" });
 
-    // Auto-log one activity entry per meeting (deduped via external_ref)
+    // Auto-log one activity entry per matched meeting (deduped via external_ref)
     if (accountId) {
       await supabase.from("activity_log").upsert({
         user_id:      userId,
+        org_id:       orgId,
         account_id:   accountId,
         type:         "Meeting",
         source:       "fireflies_auto",
@@ -116,14 +119,13 @@ async function syncFirefliesForUser(userId) {
     synced++;
     if (accountId) {
       matched++;
-      // Update last_contact if this meeting is more recent
       if (meetingDate) {
         const meetingDay = meetingDate.slice(0, 10);
         const stored     = lastContactMap.get(accountId);
         if (!stored || meetingDay > stored) {
           await supabase.from("accounts")
             .update({ last_contact: meetingDay })
-            .eq("id", accountId).eq("user_id", userId);
+            .eq("id", accountId).eq("org_id", orgId);
           lastContactMap.set(accountId, meetingDay);
         }
       }
@@ -136,17 +138,17 @@ async function syncFirefliesForUser(userId) {
 async function runFirefliesSync() {
   const { data: rows } = await supabase
     .from("integrations")
-    .select("user_id")
+    .select("org_id")
     .eq("connector_id", "fireflies")
     .eq("connected", true);
 
-  for (const { user_id } of (rows || [])) {
+  for (const { org_id } of (rows || [])) {
     try {
-      await syncFirefliesForUser(user_id);
+      await syncFirefliesForOrg(org_id);
     } catch (e) {
-      console.error(`[Fireflies] sync failed for ${user_id}: ${e.message}`);
+      console.error(`[Fireflies] sync failed for org ${org_id}: ${e.message}`);
     }
   }
 }
 
-module.exports = { syncFirefliesForUser, runFirefliesSync };
+module.exports = { syncFirefliesForOrg, runFirefliesSync };

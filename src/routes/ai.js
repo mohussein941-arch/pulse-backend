@@ -1,4 +1,5 @@
 // routes/ai.js — BYOK AI config + pre-call brief + account Q&A + briefing summary
+// M0b: account reads scoped to req.orgId; profile reads stay per-user (Tier C)
 
 const express  = require('express');
 const router   = express.Router();
@@ -36,7 +37,7 @@ function safeBlock(label, content) {
 
 // ── Config endpoints ──────────────────────────────────────────────────────────
 
-// GET /api/ai/config — returns masked key
+// GET /api/ai/config — returns masked key (per-user, profiles is Tier C)
 router.get('/config', async (req, res, next) => {
   try {
     const { data } = await supabase
@@ -119,7 +120,7 @@ router.post('/brief/:accountId', async (req, res, next) => {
     const config = await getUserAiConfig(req.userId);
     if (!requireAiConfig(config, res)) return;
 
-    // Load account + related data
+    // Load account + related data — scoped to org (accounts is Tier B)
     const { data: account, error } = await supabase
       .from('accounts')
       .select(`
@@ -130,7 +131,7 @@ router.post('/brief/:accountId', async (req, res, next) => {
         tasks         ( title, priority, due_date, done )
       `)
       .eq('id', req.params.accountId)
-      .eq('user_id', req.userId)
+      .eq('org_id', req.orgId)
       .maybeSingle();
 
     if (error || !account) return res.status(404).json({ error: 'Account not found' });
@@ -203,6 +204,7 @@ router.post('/chat/:accountId', async (req, res, next) => {
     if (!question?.trim()) return res.status(400).json({ error: 'question is required' });
     if (question.length > 500) return res.status(400).json({ error: 'question too long (max 500 chars)' });
 
+    // Account read — scoped to org (accounts is Tier B)
     const { data: account } = await supabase
       .from('accounts')
       .select(`
@@ -213,7 +215,7 @@ router.post('/chat/:accountId', async (req, res, next) => {
         tasks         ( title, priority, due_date, done )
       `)
       .eq('id', req.params.accountId)
-      .eq('user_id', req.userId)
+      .eq('org_id', req.orgId)
       .maybeSingle();
 
     if (!account) return res.status(404).json({ error: 'Account not found' });
@@ -244,8 +246,6 @@ router.post('/chat/:accountId', async (req, res, next) => {
       { role: 'user', content: safeBlock('question', question) },
     ];
 
-    // For OpenAI multi-turn, system goes in messages array
-    // For Anthropic, system is separate — callAI handles this correctly
     const answer = await callAI(config, {
       system: `You are a Customer Success assistant. Answer questions about the following account based only on the data provided. Be concise (2-4 sentences). If the data doesn't support a definitive answer, say so.\n\n${safeBlock('account_data', snapshot)}`,
       user: messages.map(m => `${m.role === 'assistant' ? 'Assistant' : 'CSM'}: ${m.content}`).join('\n\n'),

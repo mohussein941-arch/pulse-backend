@@ -3,8 +3,8 @@
  *
  * 1. requireApiKey  — checks x-pulse-secret header (service-to-service calls,
  *                     used by the frontend's API client)
- * 2. requireUser    — verifies the Supabase JWT in the Authorization header
- *                     and attaches req.userId for use in every route
+ * 2. requireUser    — verifies the Supabase JWT in the Authorization header,
+ *                     attaches req.userId, req.orgId, and req.orgRole to every request
  *
  * All /api/* routes use both. The user's JWT comes from Supabase Auth
  * after they sign in — the frontend sends it as:
@@ -13,6 +13,7 @@
  */
 
 const { createClient } = require("@supabase/supabase-js");
+const supabase         = require("../supabase");
 
 // Reuse a single anon-key client for JWT verification across all requests
 let _anonClient = null;
@@ -44,7 +45,7 @@ const requireApiKey = (req, res, next) => {
   next();
 };
 
-// ── JWT verification — extracts user_id from Supabase JWT ─────────────────────
+// ── JWT verification — extracts user_id and org membership from Supabase JWT ──
 const requireUser = async (req, res, next) => {
   const authHeader = req.headers["authorization"];
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -60,9 +61,22 @@ const requireUser = async (req, res, next) => {
       return res.status(401).json({ error: "Unauthorised — invalid or expired token" });
     }
 
-    // Attach user ID to request — every route uses this to scope queries
-    req.userId = user.id;
+    // Attach user ID to request — audit trail and per-user data (profiles, AI config)
+    req.userId    = user.id;
     req.userEmail = user.email;
+
+    // M0b: look up org membership and attach orgId + orgRole to every request.
+    // If the user has no org row, orgId will be null and RLS will block data access
+    // (surfaces as a clean empty result rather than a data leak).
+    const { data: membership } = await supabase
+      .from("org_members")
+      .select("org_id, role")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    req.orgId   = membership?.org_id || null;
+    req.orgRole = membership?.role   || null;
+
     next();
   } catch (err) {
     return res.status(401).json({ error: "Unauthorised — token verification failed" });

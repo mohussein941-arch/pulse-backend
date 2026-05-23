@@ -1,6 +1,9 @@
 // engine/automationRunner.js
 // Evaluates automation rules against every account once per cron tick.
 // Deduplication: each (rule, account) pair has a per-trigger-type cooldown.
+// M0b: loop is now org-scoped. Rules and accounts are fetched by org_id.
+// Alert emails and task creation still route to rule.user_id (the creator) —
+// this column will be renamed to created_by in Phase 2 (Step 8).
 
 const { createClient }       = require('@supabase/supabase-js');
 const { sendAutomationEmail } = require('../utils/emailSender');
@@ -135,7 +138,10 @@ async function executeAction(rule, account, ctx) {
     case 'log_activity': {
       const note = resolve(cfg.note || `Automation: ${rule.name}`, account);
       await supabase.from('activity_log').insert({
-        user_id: rule.user_id, account_id: account.id,
+        // user_id stays until Phase 2 renames it to created_by
+        user_id:    rule.user_id,
+        org_id:     rule.org_id,
+        account_id: account.id,
         type: 'Note', note, logged_at: today,
       });
       return note;
@@ -145,7 +151,9 @@ async function executeAction(rule, account, ctx) {
       const title       = resolve(cfg.title || `Follow up: ${account.name}`, account);
       const description = resolve(cfg.description || '', account);
       await supabase.from('tasks').insert({
+        // user_id stays until Phase 2 renames it to created_by
         user_id:      rule.user_id,
+        org_id:       rule.org_id,
         account_id:   account.id,
         account_name: account.name,
         title,
@@ -182,7 +190,8 @@ async function executeAction(rule, account, ctx) {
       const body    = resolve(cfg.body    || `Rule "${rule.name}" triggered for ${account.name}.`, account);
       const html    = alertEmailHtml(account, rule, body);
 
-      const sent = await sendAutomationEmail(rule.user_id, ctx.profile?.email, subject, html);
+      // Route email to rule creator (ctx.creatorProfile), not org-wide
+      const sent = await sendAutomationEmail(rule.user_id, ctx.creatorProfile?.email, subject, html);
       return sent ? `Email alert sent: "${subject}"` : 'Email alert skipped — no email account connected';
     }
 
@@ -220,9 +229,10 @@ function scopeFilter(accounts, rule) {
   });
 }
 
-// ─── Main runner ──────────────────────────────────────────────────────────────
+// ─── Main runner — M0b: org-scoped loop ──────────────────────────────────────
 async function runAutomationEngine() {
   try {
+    // Fetch all active rules across all orgs
     const { data: rules } = await supabase
       .from('automation_rules')
       .select('*')
@@ -230,35 +240,36 @@ async function runAutomationEngine() {
 
     if (!rules?.length) return;
 
-    // Group rules by user
-    const byUser = {};
+    // Group rules by org_id (M0b: org scope replaces user scope)
+    const byOrg = {};
     for (const rule of rules) {
-      (byUser[rule.user_id] = byUser[rule.user_id] || []).push(rule);
+      const key = rule.org_id;
+      if (!key) continue; // skip rules with no org yet (pre-migration rows)
+      (byOrg[key] = byOrg[key] || []).push(rule);
     }
 
-    for (const [userId, userRules] of Object.entries(byUser)) {
-      // Fetch accounts for this user
+    for (const [orgId, orgRules] of Object.entries(byOrg)) {
+      // Fetch all accounts for this org
       const { data: accounts } = await supabase
         .from('accounts')
         .select('id, name, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, archived, created_at, active_playbook_id')
-        .eq('user_id', userId)
+        .eq('org_id', orgId)
         .eq('archived', false);
 
       if (!accounts?.length) continue;
 
       // Pre-fetch recent survey responses if any rule uses survey_low_score
-      const needsSurveys = userRules.some(r => r.trigger_type === 'survey_low_score');
+      const needsSurveys = orgRules.some(r => r.trigger_type === 'survey_low_score');
       let recentResponses = [];
       if (needsSurveys) {
         const since24h = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
-        // Get surveys for this user's accounts, then get responses for those surveys
         const { data: surveys } = await supabase
           .from('surveys')
           .select('id, account_id')
-          .eq('user_id', userId);
+          .eq('org_id', orgId);
 
         if (surveys?.length) {
-          const surveyIds = surveys.map(s => s.id);
+          const surveyIds  = surveys.map(s => s.id);
           const accountMap = Object.fromEntries(surveys.map(s => [s.id, s.account_id]));
 
           const { data: responses } = await supabase
@@ -274,23 +285,22 @@ async function runAutomationEngine() {
         }
       }
 
-      // Pre-fetch CSM profile for email_alert actions
-      const needsEmail = userRules.some(r => r.action_type === 'email_alert');
-      let profile = null;
-      if (needsEmail) {
-        const { data } = await supabase
-          .from('profiles')
-          .select('email, full_name')
-          .eq('id', userId)
-          .maybeSingle();
-        profile = data;
-      }
+      for (const rule of orgRules) {
+        // Per-rule: fetch creator profile for email_alert routing
+        let creatorProfile = null;
+        if (rule.action_type === 'email_alert') {
+          const { data } = await supabase
+            .from('profiles')
+            .select('email, full_name')
+            .eq('id', rule.user_id)
+            .maybeSingle();
+          creatorProfile = data;
+        }
 
-      const ctx = { recentResponses, profile };
-
-      for (const rule of userRules) {
-        const cooldown      = cooldownHours(rule.trigger_type);
+        const ctx            = { recentResponses, creatorProfile };
+        const cooldown       = cooldownHours(rule.trigger_type);
         const targetAccounts = scopeFilter(accounts, rule);
+
         for (const account of targetAccounts) {
           if (await firedRecently(rule.id, account.id, cooldown)) continue;
           if (!triggered(rule, account, ctx)) continue;
@@ -298,7 +308,8 @@ async function runAutomationEngine() {
           const detail = await executeAction(rule, account, ctx);
 
           await supabase.from('automation_log').insert({
-            user_id:      userId,
+            user_id:      rule.user_id,
+            org_id:       rule.org_id,
             rule_id:      rule.id,
             account_id:   account.id,
             account_name: account.name,
