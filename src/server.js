@@ -57,6 +57,8 @@ const { runOutreachRunner }    = require("./engine/outreachRunner");
 const { runSurveyScheduler }   = require("./engine/surveyScheduler");
 const { runDigestRunner }      = require("./engine/digestRunner");
 const { requireApiKey, requireUser } = require("./middleware/auth");
+const { startEmbeddingWorker } = require("./services/context-engine/embedding");
+const aiFeedbackRouter         = require("./services/context-engine/feedback");
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -128,6 +130,7 @@ app.use("/api/portal",     portalManageRouter);
 app.use("/api/tasks",      tasksRouter);
 app.use("/api/briefing",   briefingRouter);
 app.use("/api/ai",         app.get("aiRateLimit"), aiRouter);
+app.use("/api/ai/feedback", aiFeedbackRouter);
 app.use("/api/meetings",   meetingsRouter);
 app.use("/api/webhook",    webhookApiRouter);
 app.use("/api/audit",     auditLogRouter);
@@ -150,6 +153,13 @@ app.listen(PORT, () => {
   console.log(`\n✓ Pulse backend running on port ${PORT}`);
   console.log(`  Health: http://localhost:${PORT}/health`);
   console.log(`  Mode:   ${process.env.NODE_ENV || "development"}\n`);
+
+  // Start the embedding worker (polls every 30s for unembedded interactions)
+  if (process.env.OPENAI_API_KEY) {
+    startEmbeddingWorker();
+  } else {
+    console.warn("  [WARN] OPENAI_API_KEY not set — embedding worker disabled");
+  }
 
   // Run automation engine every hour
   cron.schedule("0 * * * *", runAutomationEngine);
