@@ -1,18 +1,38 @@
 // engine/gmailIngestion.js
 // Syncs Gmail threads for all connected accounts, matches them to Pulse accounts
 // via stakeholder emails (primary) and account domain (fallback).
+//
+// M2a changes:
+//   - Fetches full message body (format:'full') for Context Engine indexing
+//   - Strips quoted reply text and HTML before writing to interactions
+//   - Truncates at 8k tokens; logs every truncation and HTML-strip for quality auditing
+//   - Bridges userId → orgId via org_members so interactions are org-scoped
+//   - Calls writeInteraction() alongside existing email_threads upsert
 
 const { google }         = require('googleapis');
 const { createClient }   = require('@supabase/supabase-js');
+const { getEncoding }    = require('js-tiktoken');
 const { decrypt, encrypt } = require('../utils/crypto');
+const { writeInteraction } = require('../services/context-engine/ingestion');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-const DAYS_BACK   = 90;   // how far back to look for threads
-const MAX_THREADS = 250;  // max threads per Gmail account per sync
+const DAYS_BACK        = 90;    // how far back to look for threads
+const MAX_THREADS      = 250;   // max threads per Gmail account per sync
+const MAX_BODY_TOKENS  = 8_000; // truncation ceiling before embedding
+
+let enc = null;
+function getEnc() {
+  if (!enc) enc = getEncoding('cl100k_base');
+  return enc;
+}
+
+function countTokens(text) {
+  return getEnc().encode(text).length;
+}
 
 // ── OAuth client ──────────────────────────────────────────────────────────────
 function getOAuthClient() {
@@ -34,8 +54,17 @@ async function syncGmailForUser(userId) {
 
   if (!emailAccounts?.length) return { synced: 0, matched: 0, accounts: 0 };
 
-  // 2. Build matching maps: email → accountId, domain → accountId
-  const { emailMap, domainMap } = await buildMatchMaps(userId);
+  // 2. Bridge userId → orgId for interactions table
+  const { data: membership } = await supabase
+    .from('org_members')
+    .select('org_id')
+    .eq('user_id', userId)
+    .maybeSingle();
+  const orgId = membership?.org_id || null;
+
+  // 3. Build matching maps: email → accountId, domain → accountId
+  //    Use org-scoped queries when orgId is available, fall back to user-scoped
+  const { emailMap, domainMap } = await buildMatchMaps(userId, orgId);
 
   if (emailMap.size === 0 && domainMap.size === 0) {
     return { synced: 0, matched: 0, accounts: 0,
@@ -49,7 +78,7 @@ async function syncGmailForUser(userId) {
   for (const emailAccount of emailAccounts) {
     try {
       const result = await syncOneGmailAccount(
-        emailAccount, userId, emailMap, domainMap
+        emailAccount, userId, orgId, emailMap, domainMap
       );
       totalSynced  += result.synced;
       totalMatched += result.matched;
@@ -59,7 +88,7 @@ async function syncGmailForUser(userId) {
     }
   }
 
-  // 3. Update last_contact on all matched accounts
+  // 4. Update last_contact on all matched accounts
   await updateLastContacts(userId, matchedAccountIds);
 
   return { synced: totalSynced, matched: totalMatched, accounts: matchedAccountIds.size };
@@ -91,28 +120,37 @@ async function runGmailSync() {
 }
 
 // ── Build email→accountId and domain→accountId lookup maps ───────────────────
-async function buildMatchMaps(userId) {
-  const emailMap  = new Map(); // 'john@acme.com' → accountId
-  const domainMap = new Map(); // 'acme.com'      → accountId
+async function buildMatchMaps(userId, orgId) {
+  const emailMap  = new Map();
+  const domainMap = new Map();
 
-  // Stakeholder emails (most reliable)
-  const { data: stakeholders } = await supabase
+  // Prefer org-scoped lookups when org is available (matches M0b schema)
+  const stakeholderQuery = supabase
     .from('stakeholders')
     .select('account_id, email')
-    .eq('user_id', userId)
     .not('email', 'is', null);
+  if (orgId) {
+    stakeholderQuery.eq('org_id', orgId);
+  } else {
+    stakeholderQuery.eq('user_id', userId);
+  }
+  const { data: stakeholders } = await stakeholderQuery;
 
   for (const s of stakeholders || []) {
     if (s.email) emailMap.set(s.email.toLowerCase().trim(), s.account_id);
   }
 
-  // Account domains (fallback)
-  const { data: accounts } = await supabase
+  const accountQuery = supabase
     .from('accounts')
     .select('id, domain')
-    .eq('user_id', userId)
     .eq('archived', false)
     .not('domain', 'is', null);
+  if (orgId) {
+    accountQuery.eq('org_id', orgId);
+  } else {
+    accountQuery.eq('user_id', userId);
+  }
+  const { data: accounts } = await accountQuery;
 
   for (const a of accounts || []) {
     if (a.domain) domainMap.set(a.domain.toLowerCase().trim(), a.id);
@@ -122,14 +160,13 @@ async function buildMatchMaps(userId) {
 }
 
 // ── Sync one connected Gmail account ─────────────────────────────────────────
-async function syncOneGmailAccount(emailAccount, userId, emailMap, domainMap) {
+async function syncOneGmailAccount(emailAccount, userId, orgId, emailMap, domainMap) {
   const gmail = await getAuthedGmailClient(emailAccount);
 
   const afterTs = Math.floor(
     (Date.now() - DAYS_BACK * 24 * 60 * 60 * 1000) / 1000
   );
 
-  // Fetch thread list (metadata only — fast, no content download)
   const { data: listData } = await gmail.users.threads.list({
     userId:     'me',
     q:          `after:${afterTs} -in:spam -in:trash -in:promotions -category:promotions`,
@@ -142,21 +179,20 @@ async function syncOneGmailAccount(emailAccount, userId, emailMap, domainMap) {
 
   for (const threadItem of threadItems) {
     try {
+      // Fetch full message payload (not metadata-only) to get body content
       const { data: thread } = await gmail.users.threads.get({
-        userId:          'me',
-        id:              threadItem.id,
-        format:          'metadata',
-        metadataHeaders: ['From', 'To', 'Cc', 'Subject', 'Date'],
+        userId:  'me',
+        id:      threadItem.id,
+        format:  'full',
       });
 
       const parsed    = parseThread(thread, emailAccount.email);
       const accountId = matchToAccount(parsed.participants, emailAccount.email, emailMap, domainMap);
 
-      if (!accountId) continue;
-
+      // ── Legacy email_threads upsert (preserved for UI consumers) ─────────
       await supabase.from('email_threads').upsert({
         user_id:          userId,
-        account_id:       accountId,
+        account_id:       accountId || null,
         gmail_thread_id:  thread.id,
         subject:          parsed.subject,
         participants:     parsed.participants,
@@ -164,34 +200,167 @@ async function syncOneGmailAccount(emailAccount, userId, emailMap, domainMap) {
         last_message_from: parsed.lastMessageFrom,
         snippet:          parsed.snippet,
         message_count:    thread.messages.length,
-        is_unread_reply:  parsed.isUnreadReply(emailAccount.email),
+        is_unread_reply:  parsed.isUnreadReply,
         synced_at:        new Date().toISOString(),
       }, { onConflict: 'user_id,gmail_thread_id', ignoreDuplicates: false });
 
-      // Auto-log one activity entry per thread (deduped via external_ref)
-      await supabase.from('activity_log').upsert({
-        user_id:      userId,
-        account_id:   accountId,
-        type:         'Email',
-        source:       'gmail_auto',
-        external_ref: `gmail:${thread.id}`,
-        note:         parsed.subject !== '(no subject)'
-          ? `Email thread: ${parsed.subject}`
-          : `Email thread with ${parsed.participants.slice(0, 2).join(', ')}`,
-        logged_at:    parsed.lastMessageAt.split('T')[0],
-      }, { onConflict: 'user_id,external_ref', ignoreDuplicates: true });
+      // ── interactions write (M2a) ──────────────────────────────────────────
+      if (accountId && orgId) {
+        const externalId = `gmail:${thread.id}`;
+        const content    = buildThreadContent(parsed, thread.id);
+
+        await writeInteraction({
+          orgId,
+          accountId,
+          source:     'email_thread',
+          direction:  parsed.direction,
+          content,
+          externalId,
+          timestamp:  parsed.lastMessageAt,
+          createdBy:  userId,
+          metadata: {
+            subject:        parsed.subject,
+            participants:   parsed.participants,
+            message_count:  thread.messages.length,
+            gmail_thread_id: thread.id,
+          },
+        });
+      }
+
+      // ── Activity log (deduped via external_ref) ───────────────────────────
+      if (accountId) {
+        await supabase.from('activity_log').upsert({
+          user_id:      userId,
+          account_id:   accountId,
+          type:         'Email',
+          source:       'gmail_auto',
+          external_ref: `gmail:${thread.id}`,
+          note:         parsed.subject !== '(no subject)'
+            ? `Email thread: ${parsed.subject}`
+            : `Email thread with ${parsed.participants.slice(0, 2).join(', ')}`,
+          logged_at:    parsed.lastMessageAt.split('T')[0],
+        }, { onConflict: 'user_id,external_ref', ignoreDuplicates: true });
+      }
 
       synced.push(thread.id);
-      accountIds.add(accountId);
+      if (accountId) accountIds.add(accountId);
     } catch {
       // Skip individual thread failures silently
     }
   }
 
-  return { synced: synced.length, matched: synced.length, accountIds };
+  return { synced: synced.length, matched: accountIds.size, accountIds };
 }
 
-// ── Parse thread metadata into usable structure ───────────────────────────────
+// ── Build clean text content from thread for Context Engine ──────────────────
+function buildThreadContent(parsed, threadId) {
+  let text = parsed.bodyText;
+
+  // Strip quoted reply text using standard patterns
+  text = stripQuotedText(text);
+
+  // Truncate at 8k tokens, log every truncation for retrieval quality auditing
+  const tokens = countTokens(text);
+  if (tokens > MAX_BODY_TOKENS) {
+    text = truncateToTokens(text, MAX_BODY_TOKENS);
+    console.log(`[Gmail Ingestion] truncated thread ${threadId}: ${tokens} → ${MAX_BODY_TOKENS} tokens`);
+  }
+
+  return text.trim() || null;
+}
+
+// ── Extract body text from Gmail full-format thread ───────────────────────────
+// Tries text/plain first; falls back to HTML-stripped text/html.
+// Logs every HTML strip for retrieval quality auditing.
+function extractBodyFromThread(thread, ownEmail, threadId) {
+  const messages = thread.messages || [];
+  // Use the last message in the thread (most recent content)
+  const lastMsg  = messages[messages.length - 1];
+  if (!lastMsg?.payload) return '';
+
+  const plain = extractPartByMime(lastMsg.payload, 'text/plain');
+  if (plain) return decodeBase64Url(plain);
+
+  const html = extractPartByMime(lastMsg.payload, 'text/html');
+  if (html) {
+    const stripped = stripHtml(decodeBase64Url(html));
+    console.log(`[Gmail Ingestion] HTML-stripped thread ${threadId} (no text/plain part)`);
+    return stripped;
+  }
+
+  return '';
+}
+
+// Recursively find the first MIME part matching the given mimeType
+function extractPartByMime(payload, mimeType) {
+  if (payload.mimeType === mimeType) {
+    return payload.body?.data || null;
+  }
+  for (const part of payload.parts || []) {
+    const found = extractPartByMime(part, mimeType);
+    if (found) return found;
+  }
+  return null;
+}
+
+function decodeBase64Url(b64) {
+  // Gmail uses base64url encoding
+  const padded = b64.replace(/-/g, '+').replace(/_/g, '/');
+  return Buffer.from(padded, 'base64').toString('utf8');
+}
+
+// ── HTML → plain text ─────────────────────────────────────────────────────────
+function stripHtml(html) {
+  return html
+    // Remove entire <style> and <script> blocks
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    // Replace block elements with newlines
+    .replace(/<(br|p|div|tr|li|h[1-6])[^>]*\/?>/gi, '\n')
+    // Strip remaining tags
+    .replace(/<[^>]+>/g, '')
+    // Decode common HTML entities
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    // Collapse runs of whitespace to single spaces / newlines
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// ── Strip quoted reply text ───────────────────────────────────────────────────
+function stripQuotedText(text) {
+  // "On [date], [name] wrote:" — Gmail / Apple Mail standard
+  text = text.replace(/\nOn .{10,80},?\s*[\r\n]?.{5,100} wrote:\s*[\r\n][\s\S]*/i, '');
+
+  // "From: ... Sent: ... To: ... Subject: ..." — Outlook style
+  text = text.replace(/\n[-\s]*Original Message[-\s]*\n[\s\S]*/i, '');
+  text = text.replace(/\nFrom:.*\nSent:.*\nTo:.*\nSubject:[\s\S]*/i, '');
+
+  // Lines beginning with > (standard email quote prefix)
+  text = text
+    .split('\n')
+    .filter(line => !line.trimStart().startsWith('>'))
+    .join('\n');
+
+  // Clean up trailing whitespace after removal
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// ── Truncate text to N tokens ─────────────────────────────────────────────────
+function truncateToTokens(text, maxTokens) {
+  const tokenIds = getEnc().encode(text);
+  if (tokenIds.length <= maxTokens) return text;
+  const decoder    = new TextDecoder();
+  const truncated  = tokenIds.slice(0, maxTokens);
+  return decoder.decode(getEnc().decode(truncated));
+}
+
+// ── Parse thread metadata + body into usable structure ───────────────────────
 function parseThread(thread, ownEmail) {
   const messages    = thread.messages || [];
   const lastMessage = messages[messages.length - 1];
@@ -212,9 +381,17 @@ function parseThread(thread, ownEmail) {
   }
   const participants = [...allEmails].filter(e => e !== ownEmail.toLowerCase());
 
-  // Determine last message date
-  const dateHeader = getHeader('Date');
+  const dateHeader    = getHeader('Date');
   const lastMessageAt = dateHeader ? new Date(dateHeader).toISOString() : new Date().toISOString();
+
+  // True when last message is from a participant (not CSM) — CSM hasn't replied
+  const isUnreadReply = lastMessageFrom.toLowerCase() !== ownEmail.toLowerCase();
+
+  // Direction from CSM's perspective
+  const direction = isUnreadReply ? 'inbound' : 'outbound';
+
+  // Extract body text from the full payload
+  const bodyText = extractBodyFromThread(thread, ownEmail, thread.id);
 
   return {
     subject,
@@ -222,10 +399,9 @@ function parseThread(thread, ownEmail) {
     lastMessageAt,
     lastMessageFrom,
     snippet,
-    isUnreadReply: (ownEmail) => {
-      // True when last message is from a participant (not CSM) — CSM hasn't replied
-      return lastMessageFrom.toLowerCase() !== ownEmail.toLowerCase();
-    },
+    isUnreadReply,
+    direction,
+    bodyText,
   };
 }
 
@@ -233,12 +409,10 @@ function parseThread(thread, ownEmail) {
 function matchToAccount(participants, ownEmail, emailMap, domainMap) {
   for (const email of participants) {
     const lc = email.toLowerCase();
-    if (lc === ownEmail.toLowerCase()) continue; // skip own email
+    if (lc === ownEmail.toLowerCase()) continue;
 
-    // 1. Direct stakeholder email match
     if (emailMap.has(lc)) return emailMap.get(lc);
 
-    // 2. Domain match
     const domain = lc.split('@')[1];
     if (domain && domainMap.has(domain)) return domainMap.get(domain);
   }
@@ -260,7 +434,6 @@ async function updateLastContacts(userId, accountIds) {
 
     const emailDate = data.last_message_at.split('T')[0];
 
-    // Only update if this email date is more recent than the stored last_contact
     await supabase
       .from('accounts')
       .update({ last_contact: emailDate, updated_at: new Date().toISOString() })

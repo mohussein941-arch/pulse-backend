@@ -34,6 +34,7 @@ const authRouter               = require("./routes/auth");
 const surveysRouter            = require("./routes/surveys");
 const surveyRespondRouter      = require("./routes/survey-respond");
 const emailAuthRouter          = require("./routes/emailAuth");
+const calendarAuthRouter       = require("./routes/calendarAuth");
 const whatsappRouter           = require("./routes/whatsapp");
 const automationRouter         = require("./routes/automation");
 const onboardingRouter         = require("./routes/onboarding");
@@ -53,6 +54,7 @@ const { runAutomationEngine }  = require("./engine/automationRunner");
 const { runBriefingEngine }    = require("./engine/briefingRunner");
 const { runGmailSync }         = require("./engine/gmailIngestion");
 const { runFirefliesSync }     = require("./engine/firefliesIngestion");
+const { runCalendarSync }      = require("./engine/calendarIngestion");
 const { runOutreachRunner }    = require("./engine/outreachRunner");
 const { runSurveyScheduler }   = require("./engine/surveyScheduler");
 const { runDigestRunner }      = require("./engine/digestRunner");
@@ -113,7 +115,8 @@ app.get("/health", (req, res) => {
 app.use("/auth",    authRouter);
 app.use("/oauth",   oauthRouter);
 app.use("/survey",  surveyRespondRouter);   // customers submit here — no auth
-app.use("/api/email",     emailAuthRouter);  // email OAuth callbacks must be public
+app.use("/api/email",     emailAuthRouter);    // email OAuth callbacks must be public
+app.use("/api/calendar", calendarAuthRouter); // calendar OAuth callback must be public
 app.use("/api/whatsapp", whatsappRouter);   // webhook must be public — Meta sends here
 app.use("/portal",       portalRouter);       // customer portal — public magic link
 app.use("/handover",     handoverRouter);     // sales handover — public magic link
@@ -176,6 +179,10 @@ app.listen(PORT, () => {
   // Sync Fireflies meeting notes every 6 hours
   cron.schedule("0 */6 * * *", runFirefliesSync);
   console.log("  Fireflies sync scheduled (every 6 hours)");
+
+  // Sync Google Calendar events every 6 hours
+  cron.schedule("0 */6 * * *", runCalendarSync);
+  console.log("  Calendar sync scheduled (every 6 hours)");
 
   // Detect signals and queue outreach drafts every 6 hours
   cron.schedule("0 */6 * * *", runOutreachRunner);

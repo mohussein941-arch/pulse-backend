@@ -3,6 +3,7 @@
 
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
 const { requireApiKey, requireUser } = require('../middleware/auth');
@@ -27,6 +28,7 @@ const getGoogleOAuthClient = () =>
 
 const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
 ];
@@ -36,6 +38,43 @@ const OUTLOOK_AUTH_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/a
 const OUTLOOK_TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
 const OUTLOOK_SCOPES = 'https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read offline_access';
 const OUTLOOK_REDIRECT = `${process.env.API_BASE_URL}/api/email/outlook/callback`;
+
+// ─── HMAC OAuth state helpers ─────────────────────────────────────────────────
+// State = base64url({ u: userId, ts: timestamp, sig: hmac[:32] })
+// Expiry: 10 minutes. Verified with constant-time compare to prevent timing attacks.
+
+function generateOAuthState(userId) {
+  const ts  = Date.now().toString();
+  const key = Buffer.from(process.env.ENCRYPTION_KEY, 'hex');
+  const sig = crypto.createHmac('sha256', key)
+    .update(`${userId}:${ts}`)
+    .digest('hex')
+    .slice(0, 32);
+  return Buffer.from(JSON.stringify({ u: userId, ts, sig })).toString('base64url');
+}
+
+function verifyOAuthState(state) {
+  try {
+    const { u: userId, ts, sig } = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'));
+    if (!userId || !ts || !sig) return null;
+
+    // 10-minute expiry
+    if (Date.now() - parseInt(ts, 10) > 10 * 60 * 1000) return null;
+
+    const key      = Buffer.from(process.env.ENCRYPTION_KEY, 'hex');
+    const expected = crypto.createHmac('sha256', key)
+      .update(`${userId}:${ts}`)
+      .digest('hex')
+      .slice(0, 32);
+
+    if (!crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))) {
+      return null;
+    }
+    return userId;
+  } catch {
+    return null;
+  }
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // GMAIL ROUTES
@@ -49,7 +88,7 @@ router.get('/gmail/auth', requireApiKey, requireUser, (req, res) => {
     access_type: 'offline',
     scope: GMAIL_SCOPES,
     prompt: 'consent',
-    state: req.userId,
+    state: generateOAuthState(req.userId),
   });
   res.json({ url });
 });
@@ -58,18 +97,19 @@ router.get('/gmail/auth', requireApiKey, requireUser, (req, res) => {
 // Google redirects here after user grants access — must stay public
 const processedCodes = new Set();
 router.get('/gmail/callback', async (req, res) => {
-  const { code, state: userId, error } = req.query;
+  const { code, state, error } = req.query;
 
   if (error) {
     return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=access_denied`);
   }
 
-  if (!code || processedCodes.has(code)) {
-    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=duplicate`);
+  const userId = verifyOAuthState(state);
+  if (!userId) {
+    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=invalid_state`);
   }
 
-  if (!userId || userId.length < 10) {
-    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=missing_user`);
+  if (!code || processedCodes.has(code)) {
+    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=duplicate`);
   }
 
   processedCodes.add(code);
@@ -125,7 +165,7 @@ router.get('/outlook/auth', requireApiKey, requireUser, (req, res) => {
     redirect_uri: OUTLOOK_REDIRECT,
     scope: OUTLOOK_SCOPES,
     response_mode: 'query',
-    state: req.userId,
+    state: generateOAuthState(req.userId),
     prompt: 'consent',
   });
   res.json({ url: `${OUTLOOK_AUTH_URL}?${params}` });
@@ -133,14 +173,15 @@ router.get('/outlook/auth', requireApiKey, requireUser, (req, res) => {
 
 // GET /api/email/outlook/callback — must stay public
 router.get('/outlook/callback', async (req, res) => {
-  const { code, state: userId, error } = req.query;
+  const { code, state, error } = req.query;
 
   if (error) {
     return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=access_denied`);
   }
 
-  if (!userId || userId.length < 10) {
-    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=missing_user`);
+  const userId = verifyOAuthState(state);
+  if (!userId) {
+    return res.redirect(`${process.env.FRONTEND_URL}/settings/email?error=invalid_state`);
   }
 
   try {
@@ -468,4 +509,7 @@ function makeRawEmail(fromEmail, fromName, to, subject, htmlBody) {
     .replace(/=+$/, '');
 }
 
+// Export state helpers for use by calendarAuth.js
 module.exports = router;
+module.exports.generateOAuthState = generateOAuthState;
+module.exports.verifyOAuthState   = verifyOAuthState;
