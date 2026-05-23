@@ -9,6 +9,7 @@
 
 const { google }   = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
+const { getEncoding } = require('js-tiktoken');
 const { decrypt, encrypt } = require('../utils/crypto');
 const { writeInteraction } = require('../services/context-engine/ingestion');
 const { getCalendarOAuthClient } = require('../routes/calendarAuth');
@@ -20,6 +21,20 @@ const supabase = createClient(
 
 const SYNC_DAYS_PAST   = 30;
 const SYNC_DAYS_FUTURE = 14;
+const MAX_BODY_TOKENS  = 8_000;
+
+let enc = null;
+function getEnc() {
+  if (!enc) enc = getEncoding('cl100k_base');
+  return enc;
+}
+
+function truncateToTokens(text, maxTokens) {
+  const tokenIds = getEnc().encode(text);
+  if (tokenIds.length <= maxTokens) return text;
+  const decoder = new TextDecoder();
+  return decoder.decode(getEnc().decode(tokenIds.slice(0, maxTokens)));
+}
 
 // ── Main entry — called by cron ───────────────────────────────────────────────
 async function runCalendarSync() {
@@ -137,7 +152,7 @@ async function syncOneCalendarAccount(calAccount, userId, orgId, emailMap, domai
       if (!accountId) continue;
       matched++;
 
-      const content = buildEventContent(event);
+      const content = buildEventContent(event, event.id);
 
       await writeInteraction({
         orgId,
@@ -166,43 +181,60 @@ async function syncOneCalendarAccount(calAccount, userId, orgId, emailMap, domai
 }
 
 // ── Build plain-text content for the event ───────────────────────────────────
-function buildEventContent(event) {
+// Format: title / attendees / start time / blank line / description body (if present).
+// Organizer included when different from the calendar owner — useful for retrieval
+// ("who set up this meeting"). Location included when present.
+// Token cap: 8k. Description is the only variable-length field in practice.
+function buildEventContent(event, eventId) {
   const lines = [];
 
-  lines.push(`Meeting: ${event.summary || '(no title)'}`);
+  // Line 1 — title
+  lines.push(event.summary || '(no title)');
 
-  if (event.start?.dateTime) {
-    const start = new Date(event.start.dateTime);
-    lines.push(`Date: ${start.toUTCString()}`);
-  }
-  if (event.start?.dateTime && event.end?.dateTime) {
-    const durationMs = new Date(event.end.dateTime) - new Date(event.start.dateTime);
-    const minutes    = Math.round(durationMs / 60_000);
-    lines.push(`Duration: ${minutes} minutes`);
-  }
-
+  // Line 2 — attendees (display name preferred over email where available)
   const attendees = (event.attendees || []).map(a =>
     a.displayName ? `${a.displayName} <${a.email}>` : a.email
   );
-  if (attendees.length) {
-    lines.push(`Attendees: ${attendees.join(', ')}`);
+  if (attendees.length) lines.push(`Attendees: ${attendees.join(', ')}`);
+
+  // Line 3 — start time
+  if (event.start?.dateTime) {
+    lines.push(`Start: ${new Date(event.start.dateTime).toUTCString()}`);
+  }
+
+  // Organizer (omit if it's a self-organised event — organizer.self === true)
+  if (event.organizer && !event.organizer.self) {
+    const org = event.organizer.displayName
+      ? `${event.organizer.displayName} <${event.organizer.email}>`
+      : event.organizer.email;
+    lines.push(`Organizer: ${org}`);
   }
 
   if (event.location) lines.push(`Location: ${event.location}`);
 
-  const meetLink = extractMeetLink(event);
-  if (meetLink) lines.push(`Video link: ${meetLink}`);
-
+  // Description — strip HTML, then apply token cap
   if (event.description) {
     const desc = event.description
-      .replace(/<[^>]+>/g, '')   // strip any HTML in description
+      .replace(/<[^>]+>/g, '')
       .replace(/&nbsp;/g, ' ')
       .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/\n{3,}/g, '\n\n')
       .trim();
-    if (desc) lines.push(`\nDescription:\n${desc}`);
+
+    if (desc) lines.push(`\n${desc}`);
   }
 
-  return lines.join('\n');
+  let content = lines.join('\n');
+
+  const tokens = getEnc().encode(content).length;
+  if (tokens > MAX_BODY_TOKENS) {
+    content = truncateToTokens(content, MAX_BODY_TOKENS);
+    console.log(`[Calendar Ingestion] truncated event ${eventId}: ${tokens} → ${MAX_BODY_TOKENS} tokens`);
+  }
+
+  return content;
 }
 
 // ── Match attendee emails to a Pulse account ──────────────────────────────────
