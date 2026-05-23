@@ -14,9 +14,12 @@ const MODELS = {
   embed:    'text-embedding-3-small',
 };
 
-// USD per token (input / output). Source: Anthropic + OpenAI pricing pages.
+// USD per token (input / output).
+// Source: https://platform.claude.com/docs/en/about-claude/pricing (verified 2026-05-23)
+//         text-embedding-3-small: $0.020/MTok — OpenAI pricing (unchanged since Jan 2024)
+// NOTE: $0.80/$4.00 was Haiku 3.5 (retired). Haiku 4.5 is $1.00/$5.00.
 const PRICING = {
-  'claude-haiku-4-5-20251001': { input: 0.80 / 1_000_000, output: 4.00 / 1_000_000 },
+  'claude-haiku-4-5-20251001': { input: 1.00 / 1_000_000, output: 5.00 / 1_000_000 },
   'claude-sonnet-4-6':         { input: 3.00 / 1_000_000, output: 15.00 / 1_000_000 },
   'text-embedding-3-small':    { input: 0.020 / 1_000_000, output: 0 },
 };
