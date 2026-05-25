@@ -170,13 +170,26 @@ async function drainQueue() {
 
 async function pollUnembedded() {
   try {
-    // Find interactions that have no embedding row yet
-    const { data: rows, error } = await supabase
+    // Fetch already-embedded IDs first; Supabase JS doesn't support raw subqueries
+    // in .not('id', 'in', ...) — it expects a value list, not SQL.
+    const { data: embedded } = await supabase
+      .from('interaction_embeddings')
+      .select('interaction_id')
+      .eq('model', EMBEDDING_MODEL);
+
+    const embeddedIds = (embedded || []).map(r => r.interaction_id);
+
+    let query = supabase
       .from('interactions')
       .select('id')
       .not('content', 'is', null)
-      .not('id', 'in', `(SELECT interaction_id FROM interaction_embeddings WHERE model = '${EMBEDDING_MODEL}')`)
       .limit(50);
+
+    if (embeddedIds.length > 0) {
+      query = query.not('id', 'in', `(${embeddedIds.join(',')})`);
+    }
+
+    const { data: rows, error } = await query;
 
     if (error) {
       console.error('[embedding] poll query failed:', error.message);
