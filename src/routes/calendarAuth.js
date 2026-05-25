@@ -22,8 +22,12 @@ const CALENDAR_SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
 ];
 
-// Separate redirect URI from Gmail so Google knows which callback to hit
-const CALENDAR_REDIRECT = `${process.env.API_BASE_URL}/api/calendar/callback`;
+// Explicit env var (preferred) so there's no ambiguity about trailing slashes
+// on API_BASE_URL. Set GOOGLE_CALENDAR_REDIRECT_URI in Railway to:
+//   https://pulse-backend-production-485a.up.railway.app/api/calendar/callback
+const CALENDAR_REDIRECT =
+  process.env.GOOGLE_CALENDAR_REDIRECT_URI ||
+  `${process.env.API_BASE_URL}/api/calendar/callback`;
 
 function getCalendarOAuthClient() {
   return new google.auth.OAuth2(
@@ -36,6 +40,7 @@ function getCalendarOAuthClient() {
 // ── GET /api/calendar/auth ────────────────────────────────────────────────────
 // Returns the Google OAuth URL; frontend opens it in a popup or redirect
 router.get('/auth', requireApiKey, requireUser, (req, res) => {
+  console.log('[Calendar OAuth] redirect_uri =', CALENDAR_REDIRECT);
   const oauth2Client = getCalendarOAuthClient();
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -90,7 +95,7 @@ router.get('/callback', async (req, res) => {
         scope:      tokens.scope,
         updated_at: new Date().toISOString(),
       }, {
-        onConflict:       'user_id,email',
+        onConflict:       'user_id,provider,email',
         ignoreDuplicates: false,
       });
 
