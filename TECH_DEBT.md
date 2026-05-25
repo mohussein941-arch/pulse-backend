@@ -35,6 +35,16 @@ Postgres `ts_rank` is term-frequency based but not BM25-normalised. At scale, BM
 
 ---
 
+## Calendar event cancellation reconciliation
+
+When a Google Calendar event is cancelled after it has already been ingested as an `interaction`, the existing interaction row is NOT updated. The sync engine skips cancelled events on initial ingest but has no reconciliation pass to mark or tombstone previously written interactions.
+
+**Upgrade path:** On each calendar sync pass, fetch the last N days of cancelled events separately (using `showDeleted=true` and `eventTypes=cancelled` on the Google Calendar API), then update matching `interactions` rows (set a `cancelled` flag in `metadata` or soft-delete). Requires a `metadata.cancelled` convention and UI treatment in the brief generator to suppress cancelled meetings.
+
+**Triggers:** First report of a cancelled-meeting brief misleading a CSM.
+
+---
+
 ## Deferred M0b workload tables
 
 These four tables were audited in M0b and confirmed to be user_id-scoped only (no org_id column).

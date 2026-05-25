@@ -1,13 +1,17 @@
 // services/context-engine/ingestion.js — write interactions to the unified table
 //
 // writeInteraction() is the single entry point for all signal sources:
-// Fireflies transcripts, Gmail threads, internal notes, CRM events,
-// health signals, and WhatsApp messages.
+// Fireflies transcripts, Gmail threads, Calendar events, internal notes,
+// CRM events, health signals, and WhatsApp messages.
+//
+// When externalId is provided, writeInteraction is idempotent: if a row with
+// (org_id, external_id) already exists, the existing ID is returned without
+// a second insert. The DB also enforces this via idx_interactions_org_external.
 
 const supabase = require('../../supabase');
 const { scheduleEmbedding } = require('./embedding');
 
-const VALID_SOURCES    = ['call_transcript', 'email_thread', 'internal_note', 'crm_event', 'health_signal', 'whatsapp'];
+const VALID_SOURCES    = ['call_transcript', 'email_thread', 'internal_note', 'crm_event', 'health_signal', 'whatsapp', 'calendar_event'];
 const VALID_DIRECTIONS = ['inbound', 'outbound', 'internal'];
 
 /**
@@ -24,7 +28,7 @@ const VALID_DIRECTIONS = ['inbound', 'outbound', 'internal'];
  * @param {string}  [params.contactId] — stored in metadata (no interactions column)
  * @param {string}  [params.createdBy] — FK to auth.users
  * @param {string}  [params.externalId]— source-system ID for idempotency
- * @returns {Promise<string>} new interaction UUID
+ * @returns {Promise<string>} new (or existing) interaction UUID
  */
 async function writeInteraction({
   orgId,
@@ -46,6 +50,18 @@ async function writeInteraction({
   }
   if (direction && !VALID_DIRECTIONS.includes(direction)) {
     throw new Error(`writeInteraction: invalid direction "${direction}". Must be one of: ${VALID_DIRECTIONS.join(', ')}`);
+  }
+
+  // Idempotency guard — return early if this external record is already ingested
+  if (externalId) {
+    const { data: existing } = await supabase
+      .from('interactions')
+      .select('id')
+      .eq('org_id', orgId)
+      .eq('external_id', externalId)
+      .maybeSingle();
+
+    if (existing) return existing.id;
   }
 
   const meta = contactId ? { ...metadata, contact_id: contactId } : metadata;
