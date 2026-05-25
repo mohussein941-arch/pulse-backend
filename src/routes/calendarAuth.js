@@ -95,7 +95,7 @@ router.get('/callback', async (req, res) => {
         scope:      tokens.scope,
         updated_at: new Date().toISOString(),
       }, {
-        onConflict:       'user_id,email',
+        onConflict:       'user_id,provider,email',
         ignoreDuplicates: false,
       });
 
