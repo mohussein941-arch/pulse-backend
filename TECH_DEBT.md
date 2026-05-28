@@ -106,11 +106,35 @@ The 402 response fires twice on briefing load. Investigate quota / billing state
 
 ---
 
-## csm_profile DELETE/UPDATE scoping: org_id vs user_id
+## csm_profile RLS scoping — RESOLVED/CORRECTED (2026-05-28)
 
-The `csm_profile` table is keyed on `id = auth.uid()` (one row per user). Current DELETE and UPDATE RLS policies scope on `org_id = current_org_id()`. Review whether `id = auth.uid()` should be the primary scope predicate for DELETE/UPDATE, and audit table uniqueness for multi-user safety.
+~~The `csm_profile` table is keyed on `id = auth.uid()` (one row per user). Current DELETE and UPDATE RLS policies scope on `org_id = current_org_id()`.~~
 
-**Triggers:** Before any admin or multi-user feature touches csm_profile rows directly.
+**Ground truth (verified against production pg_policies 2026-05-28):**
+- There is **no DELETE policy** on `csm_profile`. Table-owner / service-role deletes are unrestricted; anon/authenticated deletes are blocked by default-deny.
+- The **SELECT and UPDATE** policies both scope on `((id = auth.uid()) AND (org_id = current_org_id()))` — both predicates are present; `org_id` is not the sole scope.
+- The **INSERT** WITH CHECK is `((id = auth.uid()) AND (org_id = current_org_id()))`.
+
+No policy change required. Item was based on a stale assumption; production state is correct.
+
+---
+
+## current_org_id() limit-1 assumption — deferred multi-org (2026-05-28)
+
+`current_org_id()` body:
+```sql
+select org_id from org_members where user_id = auth.uid() limit 1;
+```
+No `ORDER BY` — would return an arbitrary org for any user belonging to more than one org, silently scoping that user to the wrong tenant.
+
+**Current mitigation:** `UNIQUE (user_id)` constraint added to `org_members` in migration_m2e (applied 2026-05-28), enforcing one-org-per-user at the DB level. Zero violators existed at time of apply.
+
+**To support multi-org users:**
+1. `ALTER TABLE org_members DROP CONSTRAINT org_members_user_id_key;`
+2. Replace the `limit 1` lookup in `current_org_id()` with request-context org resolution — either a JWT claim (e.g. `auth.jwt() ->> 'org_id'`) or a `SET LOCAL` session variable set by the API layer on each request.
+3. Audit all 29 RLS policies that call `current_org_id()` to confirm they remain correct under per-request resolution.
+
+**Triggers:** First client requiring one user account across multiple orgs.
 
 ---
 
