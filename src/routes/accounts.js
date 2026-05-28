@@ -7,7 +7,8 @@
 
 const express  = require("express");
 const supabase = require("../supabase");
-const { calcHealth } = require("../health");
+const { calcHealth }      = require("../health");
+const { generateBrief }   = require("../engine/briefGenerator");
 
 const router = express.Router();
 
@@ -353,6 +354,33 @@ router.get("/:id/usage-history", async (req, res, next) => {
 
     res.json({ history, latest });
   } catch (err) { next(err); }
+});
+
+// ── GET /api/accounts/:id/brief ──────────────────────────────────────────────
+// Returns a pre-meeting brief for the account, served from a 24-hour cache
+// keyed on (org_id, account_id, user_id, model_id, prompt_version_hash,
+// data_state_hash). X-Brief-Cache: hit|miss signals whether Claude was called.
+router.get("/:id/brief", async (req, res, next) => {
+  try {
+    const result = await generateBrief({
+      orgId:         req.orgId,
+      accountId:     req.params.id,
+      userId:        req.userId,
+      supabaseClient: supabase,
+    });
+
+    if (!result) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    res.set("X-Brief-Cache", result.fromCache ? "hit" : "miss");
+    res.json(result.content);
+  } catch (err) {
+    if (err.message?.includes("ANTHROPIC_API_KEY")) {
+      return res.status(503).json({ error: "Brief generation unavailable: AI service not configured." });
+    }
+    next(err);
+  }
 });
 
 // ── GET /api/accounts/churn ───────────────────────────────────────────────────

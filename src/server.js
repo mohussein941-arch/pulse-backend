@@ -81,6 +81,7 @@ app.use(cors({
     /\.vercel\.app$/,   // allow all Vercel preview URLs
   ],
   credentials: true,
+  exposedHeaders: ['X-Brief-Cache'],  // allows browser clients to read this response header
 }));
 
 app.use(express.json({ limit: "2mb" }));
