@@ -59,3 +59,63 @@ Create `supabase/migration_m0b_workload_tables.sql` when ready.
 | outreach_queue    | AI-drafted outreach items per account        | M3 — close-out write-back |
 | survey_schedules  | Per-user survey send schedule config         | M5 — org-level survey config |
 | digest_schedules  | Per-user health digest schedule config       | M5 — org-level digest config |
+
+---
+
+## M2d: Dual-source playbook content (added 2026-05-26)
+
+The `playbooks` DB table is now the brief engine's source of truth (12 system rows with `org_id = NULL`). The frontend (`App.jsx` `PLAYBOOK_LIBRARY` constant) continues to read from its own hardcoded copy.
+
+**Consequence:** Any change to playbook content must be applied in **both** places — DB seed (via a new migration patching the relevant rows) and `PLAYBOOK_LIBRARY` in `App.jsx` — or briefs and the UI will drift.
+
+**Triggers:** Must be resolved before any per-org playbook customisation feature ships. The UI must read from `/api/playbooks` (a future endpoint) rather than the hardcoded constant, so that org-specific overrides are reflected in both the brief and the playbook browser.
+
+**Note:** `commsTemplate` text was omitted from the `steps` jsonb in the seed migration (migration_m2d.sql) to keep the migration reviewable; `App.jsx` remains the authoritative source of comms copy until a backend endpoint serves it.
+
+---
+
+## Seed loader: tickets skipped (HubSpot Service Hub scopes unavailable)
+
+`tools/seed-generator/load_to_hubspot.py` does not push tickets to HubSpot because the Beacon test workspace does not expose Service Hub ticket scopes (tickets pipeline/object access).
+
+**Upgrade path:** When Pulse adds a non-HubSpot ticket source (Zendesk or Jira integration), feed `output/tickets.json` through that path instead. The `load_tickets()` function remains in the loader and can be re-enabled once the correct HubSpot scopes are provisioned.
+
+**Triggers:** First integration of a ticketing system (Zendesk, Jira, or HubSpot Service Hub upgrade on the test workspace).
+
+---
+
+## Migration notes
+
+- migration_m2b v4 review missed an undefined function reference (current_user_id was used in RLS policies but never defined in any migration). Fixed pre-apply by substituting auth.uid() in all six call sites. Lesson: v4-reviewed migrations are not infallible — verify referenced functions/objects exist in the target DB before applying.
+
+---
+
+## ErrorBoundary architecture (M2 frontend)
+
+Top-level ErrorBoundary is in place in `App.jsx`. Per-component boundaries (Detail panel, Settings) are a future UX improvement: a broken account view would currently show the global fallback rather than a scoped one confined to that panel.
+
+**Triggers:** Any point where a per-component failure silently degrading to the global boundary becomes unacceptable UX.
+
+---
+
+## 402 double-fire on /api/ai/briefing-summary
+
+The 402 response fires twice on briefing load. Investigate quota / billing state on the Anthropic API key in the Railway environment.
+
+**Triggers:** Before enabling the briefing engine in production for end users.
+
+---
+
+## csm_profile DELETE/UPDATE scoping: org_id vs user_id
+
+The `csm_profile` table is keyed on `id = auth.uid()` (one row per user). Current DELETE and UPDATE RLS policies scope on `org_id = current_org_id()`. Review whether `id = auth.uid()` should be the primary scope predicate for DELETE/UPDATE, and audit table uniqueness for multi-user safety.
+
+**Triggers:** Before any admin or multi-user feature touches csm_profile rows directly.
+
+---
+
+## Pre-commit React import discipline
+
+React imports must match all hook calls in the file before committing. This was missed in the M2 App.jsx split (Component added mid-commit). Candidate for a lint rule (`eslint-plugin-react-hooks`) or a pre-commit hook that checks `import React` vs hook usage.
+
+**Triggers:** Next time App.jsx is split across commits, or when a linting pass is scheduled.
