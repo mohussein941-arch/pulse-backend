@@ -143,3 +143,30 @@ No `ORDER BY` — would return an arbitrary org for any user belonging to more t
 React imports must match all hook calls in the file before committing. This was missed in the M2 App.jsx split (Component added mid-commit). Candidate for a lint rule (`eslint-plugin-react-hooks`) or a pre-commit hook that checks `import React` vs hook usage.
 
 **Triggers:** Next time App.jsx is split across commits, or when a linting pass is scheduled.
+
+---
+
+## SECURITY DEFINER functions — search_path audit (backlog)
+
+m2f hardened current_org_id() with `SET search_path = ''` + fully-qualified references.
+The same Supabase lint pattern (function_search_path_mutable) likely applies to other
+user-defined SECURITY DEFINER functions in the schema. Enumerate and harden in a single
+batch when convenient.
+
+Audit query:
+
+    SELECT n.nspname, p.proname, p.prosecdef, p.proconfig
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.prosecdef = true
+      AND n.nspname NOT IN ('pg_catalog','information_schema','auth','storage',
+                            'realtime','supabase_functions','extensions','graphql',
+                            'graphql_public','vault','pgsodium','pgsodium_masks',
+                            'net','cron')
+    ORDER BY n.nspname, p.proname;
+
+For each row where proconfig does NOT include a search_path entry, apply the same
+hardening pattern as m2f: pin search_path to empty, fully-qualify all schema references
+in the function body.
+
+**Triggers:** Next database-hardening tidy-up pass, or whenever Supabase dashboard
+linter surfaces it.
