@@ -55,6 +55,16 @@ const schemas = {
     api_key:  z.string().min(10).max(200),
     model:    z.string().max(100).optional(),
   }),
+
+  csmProfileUpdate: z.object({
+    career_stage:  z.enum(['junior', 'mid', 'senior', 'lead']).optional(),
+    specialty:     z.enum(['general_csm', 'technical_csm', 'enterprise_csm', 'growth_csm']).optional(),
+    // working_style must be a plain JSON object — not an array, not a primitive
+    working_style: z.object({}).passthrough().optional(),
+  }).refine(
+    body => Object.keys(body).length > 0,
+    { message: 'At least one of career_stage, specialty, or working_style is required' }
+  ),
 };
 
 // ── Middleware factory ────────────────────────────────────────────────────────
