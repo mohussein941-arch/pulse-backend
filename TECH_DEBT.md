@@ -170,3 +170,57 @@ in the function body.
 
 **Triggers:** Next database-hardening tidy-up pass, or whenever Supabase dashboard
 linter surfaces it.
+
+---
+
+## M3: promptVersionHash() unused in closeout cache model
+
+`promptVersionHash()` in `closeoutPrompt.js` is exported but the closeout cache key is
+`(org_id, meeting_notes_id)` + `prompt_version` string equality — not a hash tuple as in
+M2's 6-tuple. The function is preserved for M2 engine parity. If it remains unwired by
+v2 release, remove it.
+
+**Triggers:** v2 engine review, or any future plan to switch the closeout cache to a
+hash-based key.
+
+---
+
+## M3: loadContext logic duplicated between brief and closeout generators
+
+`briefGenerator.js` (account, interactions, stakeholders, tasks, playbooks, csmProfile)
+and `closeoutGenerator.js` (same minus interactions — closeout uses `getContext` for
+that slot) share near-identical context loading code. Extract to
+`src/engine/contextLoader.js` when convenient. Duplication is intentional per the
+no-cross-engine-refactor rule during M3.
+
+**Triggers:** Any third engine that needs the same context shape, or a scheduled M3
+cleanup pass.
+
+---
+
+## M3: No automated tests for engine code (brief or closeout)
+
+Verification is smoke-test only. Add unit tests with mocked Anthropic responses
+post-M3 — particularly for retry-once semantics and cache invalidation on
+`prompt_version` mismatch.
+
+**Triggers:** First flaky smoke test, or before onboarding a second engineer to the
+engine layer.
+
+---
+
+## Pre-launch: rotate exposed Supabase service-role key
+
+`verify_phase4.cjs` (gitignored as of the prior chore commit) contained
+a hardcoded Supabase service-role key in plaintext. The file is no
+longer trackable, but the key value has been exposed to local disk,
+Claude Code session memory, and chat logs. Acceptable risk during
+solo-dev phase with no real user data; must be rotated before public
+launch alongside other env-bundled secrets.
+
+**Companion item:** API_SECRET hygiene refactor — `pulse/.env` is
+tracked and `VITE_*` vars are bundled client-side, "looks secure,
+isn't." Both keys should be rotated in the same pre-launch pass.
+
+**Triggers:** Any plan to onboard a second user, ship to a paying
+customer, or share the deployed app URL publicly.
