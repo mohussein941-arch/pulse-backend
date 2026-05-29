@@ -242,3 +242,26 @@ a third place, lift to a util.
 
 **Triggers:** Next automation-rules review, or when ai_traces / audit logs show
 zero successful `automation_task_created` events over a sustained period.
+
+---
+
+## M3d: dual link mechanism between interactions and meeting_notes
+
+`closeoutGenerator.js:181-188` links a transcript to its meeting via
+`.contains('metadata', { fireflies_id })` (JSONB match on the `metadata` column).
+The `has_transcript` lookup added in `m3d.0` (`meetings.js` GET handler) links
+the same relationship via `.in('external_id', ['fireflies:...'])` (indexed text
+column match).
+
+Both paths resolve the same logical relationship — "which interaction row
+corresponds to this meeting_notes row" — through different storage columns. If
+Fireflies ingestion ever changes one without the other (e.g. stops populating
+`metadata.fireflies_id` but keeps `external_id`, or vice versa), the two call
+sites will silently diverge: closeout generation and `has_transcript` will
+disagree on whether a transcript exists for a given meeting.
+
+**Long-term fix:** add a `meeting_notes_id` FK column to `interactions` and
+migrate both call sites to use it. Pre-launch cleanup candidate.
+
+**Triggers:** Any refactor of Fireflies ingestion, or before a second engineer
+touches either `closeoutGenerator.js` or the meetings route.

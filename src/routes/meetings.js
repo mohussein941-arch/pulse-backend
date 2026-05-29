@@ -67,7 +67,40 @@ router.get("/:accountId", async (req, res, next) => {
       .limit(50);
 
     if (error) throw error;
-    res.json({ meetings: data || [] });
+
+    if (!data || data.length === 0) {
+      return res.json({ meetings: [] });
+    }
+
+    const firefliesMeetings = data.filter(
+      m => m.fireflies_id && !m.fireflies_id.startsWith("manual-")
+    );
+    const externalIds = firefliesMeetings.map(m => `fireflies:${m.fireflies_id}`);
+
+    let transcriptRows = [];
+    if (externalIds.length > 0) {
+      const { data: trData, error: trErr } = await supabase
+        .from("interactions")
+        .select("external_id")
+        .eq("org_id", req.orgId)
+        .eq("source", "call_transcript")
+        .in("external_id", externalIds);
+      if (trErr) throw trErr;
+      transcriptRows = trData || [];
+    }
+
+    const transcriptFirefliesIds = new Set(
+      transcriptRows.map(r => r.external_id.replace(/^fireflies:/, ""))
+    );
+
+    const meetings = data.map(m => ({
+      ...m,
+      has_transcript: m.fireflies_id
+        ? transcriptFirefliesIds.has(m.fireflies_id)
+        : false,
+    }));
+
+    res.json({ meetings });
   } catch (err) { next(err); }
 });
 
