@@ -93,11 +93,22 @@ router.get("/:accountId", async (req, res, next) => {
       transcriptRows.map(r => r.external_id.replace(/^fireflies:/, ""))
     );
 
+    const { data: closeoutData, error: coErr } = await supabase
+      .from("closeouts")
+      .select("meeting_notes_id")
+      .eq("org_id", req.orgId)
+      .in("meeting_notes_id", data.map(m => m.id));
+    if (coErr) throw coErr;
+    const closeoutMeetingIds = new Set(
+      (closeoutData || []).map(r => r.meeting_notes_id)
+    );
+
     const meetings = data.map(m => ({
       ...m,
       has_transcript: m.fireflies_id
         ? transcriptFirefliesIds.has(m.fireflies_id)
         : false,
+      has_closeout: closeoutMeetingIds.has(m.id),
     }));
 
     res.json({ meetings });
