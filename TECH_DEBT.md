@@ -265,3 +265,16 @@ migrate both call sites to use it. Pre-launch cleanup candidate.
 
 **Triggers:** Any refactor of Fireflies ingestion, or before a second engineer
 touches either `closeoutGenerator.js` or the meetings route.
+
+## Modal Escape handler conflict — pre-existing, broader than m3d.1c fix
+
+The `<Modal>` component (`pulse/src/App.jsx:686-709`) and `<Confirm>` component (lines 711-730) both register `window` keydown listeners that call their `onClose`/`onCancel` callbacks on Escape. The `Detail` component registers a similar listener that closes the entire account view. When any modal is open inside Detail and the user presses Escape, BOTH listeners fire: the modal closes AND Detail closes, ejecting the user to Portfolio.
+
+`m3d.1c` patches the case for `closeoutMeeting` only. The bug remains for every other modal flag in Detail: `showStk`, `showEdit`, `showDel`, `showChurn`, `showCES`, `showPrep`, `showPortal`, `showEscalate`, and any `Confirm` invocation. Users typically don't notice because they close modals via the X button rather than Escape — but the bug is real and any keyboard-driven user or automated test will hit it.
+
+Long-term fix options:
+- Refactor `<Modal>` and `<Confirm>` to use `e.stopImmediatePropagation()` with `{ capture: true }` registration so they reliably fire before Detail's handler.
+- Move modal-open state into a context that Detail's Escape handler can read to decide whether to skip.
+- Replace `window` keydown listeners with focus-trap + element-scoped key handling.
+
+Pre-launch polish candidate.
