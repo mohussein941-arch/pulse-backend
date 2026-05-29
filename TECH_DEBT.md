@@ -224,3 +224,21 @@ isn't." Both keys should be rotated in the same pre-launch pass.
 
 **Triggers:** Any plan to onboard a second user, ship to a paying
 customer, or share the deployed app URL publicly.
+
+---
+
+## M3c: automationRunner writes lowercase priority, silently rejected by tasks_priority_check
+
+`src/engine/automationRunner.js` writes `priority: cfg.priority || 'medium'`. The
+DB CHECK constraint on `tasks.priority` requires Title Case (`'Critical'`,
+`'High'`, `'Medium'`, `'Low'` after the M3c migration). Lowercase values still
+fail the constraint and the runner's `insertErr` handling swallows the error —
+automation-triggered tasks have been silently failing to insert in production.
+
+**Fix:** capitalize `cfg.priority` before insert in `automationRunner.js`. One-line
+change mirroring the m3c accept-tasks handler:
+`priority.charAt(0).toUpperCase() + priority.slice(1)`. If the helper appears in
+a third place, lift to a util.
+
+**Triggers:** Next automation-rules review, or when ai_traces / audit logs show
+zero successful `automation_task_created` events over a sustained period.
