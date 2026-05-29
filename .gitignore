@@ -2,3 +2,14 @@ node_modules/
 .env
 *.log
 .DS_Store
+
+# Local-only planning docs
+M3_PLAN.md
+
+# Dev scaffolding (migration runners, smoke tests, verify scripts)
+scripts/
+smoke_*.cjs
+verify_*.cjs
+
+# Seed generator outputs (generated artifacts, not source)
+tools/seed-generator/output/
