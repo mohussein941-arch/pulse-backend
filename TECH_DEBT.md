@@ -278,3 +278,11 @@ Long-term fix options:
 - Replace `window` keydown listeners with focus-trap + element-scoped key handling.
 
 Pre-launch polish candidate.
+
+---
+
+## M3d: per-action confirmation state local to CloseoutModal (m3d.2)
+
+"Logged to account" (m3d.2) and forthcoming Accept/Send/Log affordances (m3d.3-5) don't persist across modal close/reopen, allowing duplicate submissions per closeout. Confirmation state is `useState` local to `CloseoutModal` and resets every time the modal is unmounted.
+
+**Resolve** with server-tracked state (`closeouts.actions_taken` column, or derive on read from interactions) after m3d.3-5 scaffold so all four converge on one mechanism. (m3d.2)
