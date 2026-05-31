@@ -281,6 +281,24 @@ Pre-launch polish candidate.
 
 ---
 
+## Email account primary management — no UI to switch primary provider
+
+No UI exists for users to switch the primary email account between connected providers. Currently first-account-wins via callback auto-promote: the OAuth callback promotes the freshly-connected account to primary only if no primary exists. Multi-account users (Gmail + Outlook) can only change their primary via `PATCH /api/email/accounts/:id/set-primary`, which is not wired into any UI.
+
+**Triggers:** Pre-launch if multi-provider email becomes a real use case.
+
+---
+
+## Email account uniqueness — no DB-level enforcement of at-most-one-primary
+
+`is_primary` uniqueness per user is enforced only by application logic in the OAuth callbacks. Nothing prevents two rows for the same `user_id` from both having `is_primary = true`, which would cause `.maybeSingle()` in `sendAutomationEmail` to throw.
+
+**Fix:** Add a partial unique index: `CREATE UNIQUE INDEX email_accounts_one_primary_per_user ON email_accounts(user_id) WHERE is_primary = true;`
+
+**Triggers:** Post-m3d, before multi-provider email is exposed to users.
+
+---
+
 ## M3d: per-action confirmation state local to CloseoutModal (m3d.2)
 
 "Logged to account" (m3d.2) and forthcoming Accept/Send/Log affordances (m3d.3-5) don't persist across modal close/reopen, allowing duplicate submissions per closeout. Confirmation state is `useState` local to `CloseoutModal` and resets every time the modal is unmounted.
