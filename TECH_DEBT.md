@@ -286,3 +286,5 @@ Pre-launch polish candidate.
 "Logged to account" (m3d.2) and forthcoming Accept/Send/Log affordances (m3d.3-5) don't persist across modal close/reopen, allowing duplicate submissions per closeout. Confirmation state is `useState` local to `CloseoutModal` and resets every time the modal is unmounted.
 
 **Resolve** with server-tracked state (`closeouts.actions_taken` column, or derive on read from interactions) after m3d.3-5 scaffold so all four converge on one mechanism. (m3d.2)
+
+- m3d.4: Email-send confirmation (`emailSent` flag) is reset on Regenerate, matching m3d.2/3 symmetry. Real consequence: a user can re-click Send after Regenerate and double-send a follow-up email. Fix as part of the post-m3d.5 per-action confirmation cross-cut — confirmation should be sticky for outbound-side-effect actions and hydrate from DB (e.g. by querying for an existing follow-up email interaction on this meeting_notes_id) on modal reopen.
