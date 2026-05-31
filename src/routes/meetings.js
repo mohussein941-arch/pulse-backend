@@ -154,7 +154,54 @@ router.post("/:id/closeout", validateUuidParam("id"), async (req, res, next) => 
       req,
     });
 
-    res.json(result);
+    const { data: meetingRow } = await supabase
+      .from("meeting_notes")
+      .select("account_id")
+      .eq("id", req.params.id)
+      .eq("org_id", req.orgId)
+      .maybeSingle();
+
+    let actions_taken = { health_logged: false, crm_accepted: false, email_sent: false, tasks_accepted: false };
+
+    if (meetingRow?.account_id) {
+      const [healthRes, crmRes, emailRes, tasksRes] = await Promise.all([
+        supabase
+          .from("interactions")
+          .select("id", { count: "exact", head: true })
+          .eq("org_id", req.orgId)
+          .eq("account_id", meetingRow.account_id)
+          .eq("source", "health_signal")
+          .eq("metadata->>meeting_notes_id", req.params.id),
+        supabase
+          .from("interactions")
+          .select("id", { count: "exact", head: true })
+          .eq("org_id", req.orgId)
+          .eq("account_id", meetingRow.account_id)
+          .eq("source", "internal_note")
+          .eq("metadata->>meeting_notes_id", req.params.id)
+          .eq("metadata->>triggered_by", "closeout_crm_update"),
+        supabase
+          .from("audit_log")
+          .select("id", { count: "exact", head: true })
+          .eq("action", "closeout.followup_sent")
+          .eq("resource_id", req.params.id),
+        supabase
+          .from("tasks")
+          .select("id", { count: "exact", head: true })
+          .eq("org_id", req.orgId)
+          .eq("meeting_notes_id", req.params.id)
+          .eq("source", "closeout"),
+      ]);
+
+      actions_taken = {
+        health_logged:  (healthRes.count ?? 0) > 0,
+        crm_accepted:   (crmRes.count ?? 0) > 0,
+        email_sent:     (emailRes.count ?? 0) > 0,
+        tasks_accepted: (tasksRes.count ?? 0) > 0,
+      };
+    }
+
+    return res.json({ ...result, actions_taken });
   } catch (err) { next(err); }
 });
 
@@ -193,15 +240,16 @@ router.post("/:id/accept-tasks", validateUuidParam("id"), async (req, res, next)
 
     const now = Date.now();
     const rows = tasks.map(t => ({
-      user_id:      req.userId,
-      org_id:       req.orgId,
-      account_id:   meeting.account_id,
-      account_name: meeting.accounts?.name || null,
-      title:        t.title.trim(),
-      description:  t.description?.trim() || null,
-      priority:     t.priority.charAt(0).toUpperCase() + t.priority.slice(1),
-      due_date:     new Date(now + t.due_in_days * 86400000).toISOString().split("T")[0],
-      source:       "closeout",
+      user_id:          req.userId,
+      org_id:           req.orgId,
+      account_id:       meeting.account_id,
+      account_name:     meeting.accounts?.name || null,
+      title:            t.title.trim(),
+      description:      t.description?.trim() || null,
+      priority:         t.priority.charAt(0).toUpperCase() + t.priority.slice(1),
+      due_date:         new Date(now + t.due_in_days * 86400000).toISOString().split("T")[0],
+      source:           "closeout",
+      meeting_notes_id: req.params.id,
     }));
 
     const { data: created, error: insertErr } = await supabase
