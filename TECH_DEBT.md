@@ -306,3 +306,18 @@ No UI exists for users to switch the primary email account between connected pro
 **Resolve** with server-tracked state (`closeouts.actions_taken` column, or derive on read from interactions) after m3d.3-5 scaffold so all four converge on one mechanism. (m3d.2)
 
 - m3d.4: Email-send confirmation (`emailSent` flag) is reset on Regenerate, matching m3d.2/3 symmetry. Real consequence: a user can re-click Send after Regenerate and double-send a follow-up email. Fix as part of the post-m3d.5 per-action confirmation cross-cut — confirmation should be sticky for outbound-side-effect actions and hydrate from DB (e.g. by querying for an existing follow-up email interaction on this meeting_notes_id) on modal reopen.
+
+---
+
+## Duplicate refreshTokenIfNeeded implementations (emailAuth.js vs emailSender.js)
+
+Two copies of `refreshTokenIfNeeded` exist:
+
+- `src/routes/emailAuth.js` (~lines 432-490) — original, correctly calls `decrypt()` on tokens before use.
+- `src/utils/emailSender.js` — previously missing all `decrypt`/`encrypt` calls; fixed in commit `fix(backend): emailSender — decrypt tokens on read, encrypt on refresh-write`.
+
+Both implementations are now functionally correct, but any future logic change (e.g. a new provider, expiry window tuning, scope refresh) must be applied in both places or they will silently drift.
+
+**Consolidation path:** Extract to `src/utils/oauthRefresh.js` (or keep in `emailSender.js` and have `emailAuth.js` import from it). The shared helper should own all decrypt-on-read / encrypt-on-write logic so there is one place to audit.
+
+**Triggers:** Pre-launch refactor pass, or whenever either file needs a token-refresh behaviour change.
