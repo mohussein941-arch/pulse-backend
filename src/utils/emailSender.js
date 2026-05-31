@@ -2,8 +2,9 @@
 // Shared email sending — used by both emailAuth routes and the automation runner.
 // Reads OAuth tokens from email_accounts table using the service role client.
 
-const { google }       = require('googleapis');
-const { createClient } = require('@supabase/supabase-js');
+const { google }           = require('googleapis');
+const { createClient }     = require('@supabase/supabase-js');
+const { encrypt, decrypt } = require('./crypto');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -49,17 +50,18 @@ async function refreshTokenIfNeeded(account) {
 
   if (account.provider === 'gmail') {
     const oauth2Client = getGoogleOAuthClient();
-    oauth2Client.setCredentials({ refresh_token: account.refresh_token });
+    oauth2Client.setCredentials({ refresh_token: decrypt(account.refresh_token) });
     const { credentials } = await oauth2Client.refreshAccessToken();
 
+    const encryptedNewAccessToken = encrypt(credentials.access_token);
     await supabase.from('email_accounts').update({
-      access_token:    credentials.access_token,
+      access_token:     encryptedNewAccessToken,
       token_expires_at: credentials.expiry_date
         ? new Date(credentials.expiry_date).toISOString()
         : null,
     }).eq('id', account.id);
 
-    return { ...account, access_token: credentials.access_token };
+    return { ...account, access_token: encryptedNewAccessToken };
   }
 
   if (account.provider === 'outlook') {
@@ -69,21 +71,24 @@ async function refreshTokenIfNeeded(account) {
       body: new URLSearchParams({
         client_id:     process.env.MICROSOFT_CLIENT_ID,
         client_secret: process.env.MICROSOFT_CLIENT_SECRET,
-        refresh_token: account.refresh_token,
+        refresh_token: decrypt(account.refresh_token),
         grant_type:    'refresh_token',
       }),
     });
     const tokens = await tokenRes.json();
     if (tokens.error) throw new Error('Failed to refresh Outlook token');
 
+    const newAccessTokenCipher  = encrypt(tokens.access_token);
+    const newRefreshTokenCipher = tokens.refresh_token ? encrypt(tokens.refresh_token) : account.refresh_token;
+
     const newExpiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
     await supabase.from('email_accounts').update({
-      access_token:     tokens.access_token,
-      refresh_token:    tokens.refresh_token || account.refresh_token,
+      access_token:     newAccessTokenCipher,
+      refresh_token:    newRefreshTokenCipher,
       token_expires_at: newExpiresAt,
     }).eq('id', account.id);
 
-    return { ...account, access_token: tokens.access_token };
+    return { ...account, access_token: newAccessTokenCipher, refresh_token: newRefreshTokenCipher };
   }
 
   return account;
@@ -92,8 +97,8 @@ async function refreshTokenIfNeeded(account) {
 async function sendViaGmail(account, to, subject, htmlBody) {
   const oauth2Client = getGoogleOAuthClient();
   oauth2Client.setCredentials({
-    access_token:  account.access_token,
-    refresh_token: account.refresh_token,
+    access_token:  decrypt(account.access_token),
+    refresh_token: decrypt(account.refresh_token),
   });
 
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
@@ -106,7 +111,7 @@ async function sendViaOutlook(account, to, subject, htmlBody) {
   const res = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
     method:  'POST',
     headers: {
-      Authorization:  `Bearer ${account.access_token}`,
+      Authorization:  `Bearer ${decrypt(account.access_token)}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
