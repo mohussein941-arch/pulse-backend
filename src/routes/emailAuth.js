@@ -145,6 +145,23 @@ router.get('/gmail/callback', async (req, res) => {
 
     if (dbError) throw dbError;
 
+    const { data: existingPrimary } = await supabase
+      .from('email_accounts')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('is_primary', true)
+      .maybeSingle();
+
+    if (!existingPrimary) {
+      const { error: promoteError } = await supabase
+        .from('email_accounts')
+        .update({ is_primary: true, updated_at: new Date().toISOString() })
+        .eq('user_id', userId)
+        .eq('provider', 'gmail')
+        .eq('email', profile.email);
+      if (promoteError) throw promoteError;
+    }
+
     audit(userId, 'email.token_stored', { meta: { provider: 'gmail' } });
     res.redirect(`${process.env.FRONTEND_URL}/settings/email?connected=gmail&email=${encodeURIComponent(profile.email)}`);
   } catch (err) {
@@ -225,6 +242,23 @@ router.get('/outlook/callback', async (req, res) => {
       });
 
     if (dbError) throw dbError;
+
+    const { data: existingPrimary } = await supabase
+      .from('email_accounts')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('is_primary', true)
+      .maybeSingle();
+
+    if (!existingPrimary) {
+      const { error: promoteError } = await supabase
+        .from('email_accounts')
+        .update({ is_primary: true, updated_at: new Date().toISOString() })
+        .eq('user_id', userId)
+        .eq('provider', 'outlook')
+        .eq('email', email);
+      if (promoteError) throw promoteError;
+    }
 
     audit(userId, 'email.token_stored', { meta: { provider: 'outlook' } });
     res.redirect(`${process.env.FRONTEND_URL}/settings/email?connected=outlook&email=${encodeURIComponent(email)}`);
