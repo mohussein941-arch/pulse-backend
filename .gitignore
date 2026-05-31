@@ -13,3 +13,7 @@ verify_*.cjs
 
 # Seed generator outputs (generated artifacts, not source)
 tools/seed-generator/output/
+
+# Debug token artifacts
+_tmp_token.txt
+mint_token.mjs
