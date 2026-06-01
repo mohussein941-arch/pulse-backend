@@ -430,3 +430,41 @@ The backfill logic in `migration_session_a_tasks_meeting_notes_id.sql` is global
 **Document for future migrations of this shape:** as additional closeout sessions accumulate audit rows, the all-or-nothing skip condition becomes increasingly likely to trigger. Any re-run of this backfill shape must confirm a single unambiguous resource_id beforehand, or adopt a different strategy (e.g. per-user resolution, or an explicit resource_id parameter).
 
 **Triggers:** Any future migration touching `tasks.meeting_notes_id`, or if `meeting_notes_id IS NULL` rows appear in production after the Session A migration.
+
+---
+
+## Session D2 finding — Supabase legacy anon/service_role JWT rotation is not independently supported
+
+The existing `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_KEY` env var values are long-lived HS256-signed JWTs issued before Supabase's 2-months-ago migration from HS256 to ECC (P-256) JWT signing. The HS256 signing key remains in the dashboard's "Previously used keys" specifically to verify these long-lived tokens.
+
+**Implication:** rotating the current JWT signing key via the Supabase dashboard's "Create Standby Key" flow does NOT rotate the legacy JWT values. The standby/switch flow rotates what signs *new* tokens (user session JWTs etc.), but the anon/service_role JWT *values* remain HS256-signed and unchanged. Confirmed empirically by decoding the JWT header on the Legacy API Keys tab: `alg: HS256`.
+
+**To actually invalidate the legacy JWT values, two paths exist:**
+1. Revoke the HS256 previous key in the Supabase dashboard. Immediately invalidates anon/service_role with no obvious regeneration path. Production-breaking. Not recommended.
+2. Migrate to the new `sb_publishable_` / `sb_secret_` API key system on the dashboard's other tab. Then click "Disable JWT-based API keys". The legacy JWTs become inert because the `apikey` header check is disabled even though the JWTs technically remain valid. This is the supported migration path. See Session F scope below.
+
+**Triggers:** Session F (Supabase key system migration) — pre-launch.
+
+---
+
+## Session F scoped — Supabase API key system migration
+
+Scope: migrate pulse-backend from the legacy `anon` / `service_role` JWT key system to the new `sb_publishable_` / `sb_secret_` system. This is the path Supabase signals as canonical (every Legacy tab nudges toward it).
+
+**Includes as a side effect:** the service-role rotation originally scoped as Session D2. When legacy JWT-based keys are disabled via the dashboard modal, the exposed values on disk become inert.
+
+**Estimated steps:**
+1. Generate `sb_secret_*` key in Supabase dashboard (Publishable and secret API keys tab).
+2. Verify supabase-js (current version in pulse-backend package.json) accepts `sb_secret_*` format in `createClient()`. Likely transparent but needs explicit verification — different SDK versions behave differently.
+3. Add new env vars to Railway and `pulse-backend/.env`: `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`. Keep old `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_KEY` during transition.
+4. Update backend code to read the new env var names. Frontend supabase-js may need similar update if it uses anon key directly.
+5. Deploy backend, smoke test.
+6. If clean: delete `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_KEY` env vars from Railway.
+7. Click "Disable JWT-based API keys" in Supabase dashboard. Legacy JWTs become inert.
+8. Delete legacy values from `pulse-backend/.env`.
+
+**Risk surface:** two-step env var transition + dashboard modal + SDK behavior verification + backend redeploy. Larger than D2 was scoped to be. Treat as its own session.
+
+**Current exposure (mitigating context for the delay):** legacy `SUPABASE_SERVICE_KEY` value exists on Mohamed's local disk and in past chat history. Audit on 2026-05-31 confirmed the value never reached GitHub. No public exposure. Migration is pre-launch hygiene, not incident response.
+
+**Triggers:** Pre-launch, before opening Pulse to non-Mohamed users.
