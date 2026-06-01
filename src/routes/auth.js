@@ -13,12 +13,12 @@
 const express   = require("express");
 const { createClient } = require("@supabase/supabase-js");
 const supabase  = require("../supabase");
-const { requireApiKey, requireUser } = require("../middleware/auth");
+const { requireUser } = require("../middleware/auth");
 
 const router = express.Router();
 
 // ── POST /auth/signup ─────────────────────────────────────────────────────────
-router.post("/signup", requireApiKey, async (req, res, next) => {
+router.post("/signup", async (req, res, next) => {
   try {
     const { email, password, fullName, company } = req.body;
 
@@ -82,7 +82,7 @@ router.post("/signup", requireApiKey, async (req, res, next) => {
 });
 
 // ── POST /auth/login ──────────────────────────────────────────────────────────
-router.post("/login", requireApiKey, async (req, res, next) => {
+router.post("/login", async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
@@ -138,7 +138,7 @@ router.post("/login", requireApiKey, async (req, res, next) => {
 });
 
 // ── POST /auth/refresh ────────────────────────────────────────────────────────
-router.post("/refresh", requireApiKey, async (req, res, next) => {
+router.post("/refresh", async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
     if (!refreshToken) {
@@ -165,7 +165,7 @@ router.post("/refresh", requireApiKey, async (req, res, next) => {
 });
 
 // ── GET /auth/profile ─────────────────────────────────────────────────────────
-router.get("/profile", requireApiKey, requireUser, async (req, res, next) => {
+router.get("/profile", requireUser, async (req, res, next) => {
   try {
     const { data: profile, error } = await supabase
       .from("profiles")
@@ -181,7 +181,7 @@ router.get("/profile", requireApiKey, requireUser, async (req, res, next) => {
 });
 
 // ── PATCH /auth/profile ───────────────────────────────────────────────────────
-router.patch("/profile", requireApiKey, requireUser, async (req, res, next) => {
+router.patch("/profile", requireUser, async (req, res, next) => {
   try {
     const { fullName, company } = req.body;
     const updates = {};

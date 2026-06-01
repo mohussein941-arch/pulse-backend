@@ -1,16 +1,5 @@
-/**
- * Auth middleware — two layers of protection:
- *
- * 1. requireApiKey  — checks x-pulse-secret header (service-to-service calls,
- *                     used by the frontend's API client)
- * 2. requireUser    — verifies the Supabase JWT in the Authorization header,
- *                     attaches req.userId, req.orgId, and req.orgRole to every request
- *
- * All /api/* routes use both. The user's JWT comes from Supabase Auth
- * after they sign in — the frontend sends it as:
- *   Authorization: Bearer <supabase_jwt>
- *   x-pulse-secret: <PULSE_API_SECRET>
- */
+// requireUser — verifies the Supabase JWT in the Authorization header,
+// attaches req.userId, req.orgId, and req.orgRole to every /api/* request.
 
 const { createClient } = require("@supabase/supabase-js");
 const supabase         = require("../supabase");
@@ -26,23 +15,6 @@ const getAnonClient = () => {
     );
   }
   return _anonClient;
-};
-
-// ── API secret check (prevents non-Pulse clients hitting the API) ─────────────
-const requireApiKey = (req, res, next) => {
-  const secret = process.env.PULSE_API_SECRET;
-  if (!secret) {
-    if (process.env.NODE_ENV !== "production") {
-      console.warn("[WARN] PULSE_API_SECRET not set — skipping in development");
-      return next();
-    }
-    return res.status(500).json({ error: "Server misconfiguration: API secret not set" });
-  }
-  const provided = req.headers["x-pulse-secret"];
-  if (!provided || provided !== secret) {
-    return res.status(401).json({ error: "Unauthorised — invalid or missing API secret" });
-  }
-  next();
 };
 
 // ── JWT verification — extracts user_id and org membership from Supabase JWT ──
@@ -83,4 +55,4 @@ const requireUser = async (req, res, next) => {
   }
 };
 
-module.exports = { requireApiKey, requireUser };
+module.exports = { requireUser };

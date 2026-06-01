@@ -59,7 +59,7 @@ const { runCalendarSync }      = require("./engine/calendarIngestion");
 const { runOutreachRunner }    = require("./engine/outreachRunner");
 const { runSurveyScheduler }   = require("./engine/surveyScheduler");
 const { runDigestRunner }      = require("./engine/digestRunner");
-const { requireApiKey, requireUser } = require("./middleware/auth");
+const { requireUser } = require("./middleware/auth");
 const { startEmbeddingWorker } = require("./services/context-engine/embedding");
 const aiFeedbackRouter         = require("./services/context-engine/feedback");
 
@@ -125,7 +125,7 @@ app.use("/handover",     handoverRouter);     // sales handover — public magic
 app.use("/webhook",      webhookPublicRouter); // product usage webhook — public
 
 // ── Protected API routes ──────────────────────────────────────────────────────
-app.use("/api", requireApiKey, requireUser);
+app.use("/api", requireUser);
 app.use("/api/accounts",   accountsRouter);
 app.use("/api/sync",       syncRouter);
 app.use("/api/surveys",    surveysRouter);
