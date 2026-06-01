@@ -299,7 +299,7 @@ No UI exists for users to switch the primary email account between connected pro
 
 ---
 
-## M3d: per-action confirmation state local to CloseoutModal (m3d.2)
+## RESOLVED (Session A, commits 1b548b2 + 09514e4 + 235c2ed): M3d: per-action confirmation state local to CloseoutModal (m3d.2)
 
 "Logged to account" (m3d.2) and forthcoming Accept/Send/Log affordances (m3d.3-5) don't persist across modal close/reopen, allowing duplicate submissions per closeout. Confirmation state is `useState` local to `CloseoutModal` and resets every time the modal is unmounted.
 
@@ -321,3 +321,112 @@ Both implementations are now functionally correct, but any future logic change (
 **Consolidation path:** Extract to `src/utils/oauthRefresh.js` (or keep in `emailSender.js` and have `emailAuth.js` import from it). The shared helper should own all decrypt-on-read / encrypt-on-write logic so there is one place to audit.
 
 **Triggers:** Pre-launch refactor pass, or whenever either file needs a token-refresh behaviour change.
+
+---
+
+## M3d: /auth/refresh endpoint rejecting valid-looking refresh tokens
+
+`pulse-backend /auth/refresh` route returns rejection for refresh tokens that appear valid by structure. Observed during m3d OAuth debugging; workaround is the user logs out and logs back in fresh (incognito clears cached token state).
+
+Investigation sits in the same neighborhood as the `API_SECRET` hygiene refactor: both touch the token/auth layer and the root cause may be related to key rotation or secret mismatch across environments.
+
+**Triggers:** Investigate alongside `API_SECRET` refactor (Session D). Surface if any user reports "logged out unexpectedly" or if auth error rate climbs in Railway logs.
+
+---
+
+## Session-expired error swallowed by re-render cascade (frontend)
+
+When `call()` throws `"Session expired"` and `setSession(null)` cascades through App, the error toast either doesn't render or flashes for one frame. User receives no feedback on session expiry — the UI simply snaps to the logged-out state.
+
+**Fix:** Add session-expiry-specific handling upstream of the re-render cascade, or wire a toast queue that survives component unmount. Alternatively, store the expiry message in a ref that the login screen can display on mount.
+
+**Triggers:** Pre-launch UX polish, or first user report of "the app just logged me out with no message."
+
+---
+
+## m3d.2: root cause unexplained — formless navigation on button click
+
+During m3d.2 debugging, the Health Signal "Log to account" button without `type="button"` caused clicks to navigate to Portfolio instead of firing the handler. Adding `type="button"` fixed it. No `<form>` ancestor was found in the JSX tree at debugging time; the mechanism by which a bare `<button>` (default type `"submit"`) triggered navigation without a surrounding form is still unexplained.
+
+**Defensive rule established:** apply `type="button"` to all new buttons. Convention held through m3d.3/4/5 with no further occurrences.
+
+**Triggers:** If the root cause is ever identified (React 19 event delegation quirk? stray form in portal?), document here. No action required otherwise.
+
+---
+
+## m3d.2: "✓ Logged" UI state anomaly — low priority, may be superseded
+
+A UI state anomaly where "✓ Logged" appeared or persisted unexpectedly was observed during the m3d.2 saga. Specific reproduction steps were not captured in real time.
+
+**Status:** Likely superseded by Session A's server-hydrated confirmation model. Worth re-checking once real CSM usage signal accumulates to confirm it doesn't recur under the new model.
+
+**Triggers:** First CSM report of stale "✓ Logged" state, or a scheduled post-launch UX review.
+
+---
+
+## type="button" defensive audit across App.jsx
+
+Convention established in m3d.2: all new buttons must carry `type="button"`. Propagated through m3d.3/4/5. Not yet audited across all pre-existing buttons in App.jsx.
+
+**Fix:** One-time mechanical pass — grep for `<button` without `type=`, add `type="button"` where missing. Cheap; no logic changes.
+
+**Triggers:** Next App.jsx refactor pass, or before onboarding a second frontend contributor.
+
+---
+
+## alignSelf without flex parent — cosmetic dead CSS
+
+Three buttons in CloseoutModal carry `alignSelf: "flex-start"` without a flex parent container, making the rule inert:
+- Accept button (m3d.3)
+- Send button (m3d.4)
+- Accept Tasks button (m3d.5)
+
+No functional issue; purely cosmetic dead CSS.
+
+**Fix:** Either remove the dead rule or convert the relevant section container to `display: flex` with intentional alignment.
+
+**Triggers:** Next CloseoutModal styling pass.
+
+---
+
+## err.message surfacing convention — pre-launch audit
+
+Established during m3d.4 OAuth debugging: surfacing `err.message` verbatim from backend responses via toast (instead of a generic "try again" message) was the decisive diagnostic affordance — turned a multi-day OAuth debug into a sequence of specific error strings (`invalid_grant`, `redirect_uri_mismatch`, "No connected email account").
+
+Convention is established but not yet audited across all `catch` blocks handling backend calls in the frontend.
+
+**Pre-launch audit:** every `catch` that handles a backend call should surface `err.message` with status-code overrides where appropriate (e.g. 402 → upgrade flow prompt rather than raw error string).
+
+**Triggers:** Pre-launch hardening pass.
+
+---
+
+## CloseoutModal: "No tasks suggested" empty-state semantics
+
+The Tasks section in CloseoutModal shows the same empty-state message whether the AI validator produced zero task suggestions OR the user manually removed all suggested tasks. A CSM cannot distinguish "Pulse had no suggestions for this meeting" from "I cleared all suggestions."
+
+**Fix:** Track the two states separately — e.g. a `tasksWereGenerated` flag alongside the tasks array — and render distinct copy for each.
+
+**Triggers:** First CSM report of confusion, or a scheduled post-launch UX review.
+
+---
+
+## CloseoutModal: due-in-days read-only in tasks editor
+
+`due_in_days` is displayed as a read-only label per task row in the CloseoutModal Tasks section (m3d.5). The value comes from the AI suggestion and is not editable before accepting.
+
+**Note:** Feature ask, not a bug. Deferred enhancement; revisit if user demand emerges.
+
+**Triggers:** First CSM request to adjust due dates before accepting tasks.
+
+---
+
+## Session A: backfill imprecision in migration_session_a_tasks_meeting_notes_id.sql
+
+The backfill logic in `migration_session_a_tasks_meeting_notes_id.sql` skips any `user_id` for which multiple distinct `closeout.tasks_accepted` resource IDs exist in `audit_log` at migration time (ambiguous mapping), leaving those tasks with `meeting_notes_id = NULL`.
+
+**At Session A apply time:** confirmed only a single resource_id existed — backfill ran cleanly. No NULL orphans were introduced.
+
+**Document for future migrations of this shape:** if a second engineer runs a similar backfill after additional closeout sessions have accumulated audit rows, the skip condition may leave a larger tail of NULL rows. The skip-rather-than-guess behaviour is intentional but must be re-evaluated for each apply.
+
+**Triggers:** Any future migration touching `tasks.meeting_notes_id`, or if `meeting_notes_id IS NULL` rows appear in production after the Session A migration.
