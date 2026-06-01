@@ -7,7 +7,7 @@ const express = require('express');
 const router  = express.Router();
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
-const { requireApiKey, requireUser } = require('../middleware/auth');
+const { requireUser } = require('../middleware/auth');
 const { encrypt } = require('../utils/crypto');
 const { audit }   = require('../middleware/audit');
 const { generateOAuthState, verifyOAuthState } = require('./emailAuth');
@@ -39,7 +39,7 @@ function getCalendarOAuthClient() {
 
 // ── GET /api/calendar/auth ────────────────────────────────────────────────────
 // Returns the Google OAuth URL; frontend opens it in a popup or redirect
-router.get('/auth', requireApiKey, requireUser, (req, res) => {
+router.get('/auth', requireUser, (req, res) => {
   console.log('[Calendar OAuth] redirect_uri =', CALENDAR_REDIRECT);
   const oauth2Client = getCalendarOAuthClient();
   const url = oauth2Client.generateAuthUrl({
@@ -110,7 +110,7 @@ router.get('/callback', async (req, res) => {
 });
 
 // ── GET /api/calendar/accounts ────────────────────────────────────────────────
-router.get('/accounts', requireApiKey, requireUser, async (req, res) => {
+router.get('/accounts', requireUser, async (req, res) => {
   const { data, error } = await supabase
     .from('email_accounts')
     .select('id, email, display_name, created_at')
@@ -123,7 +123,7 @@ router.get('/accounts', requireApiKey, requireUser, async (req, res) => {
 });
 
 // ── DELETE /api/calendar/accounts/:id ────────────────────────────────────────
-router.delete('/accounts/:id', requireApiKey, requireUser, async (req, res) => {
+router.delete('/accounts/:id', requireUser, async (req, res) => {
   const { error } = await supabase
     .from('email_accounts')
     .delete()

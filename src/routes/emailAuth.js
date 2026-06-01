@@ -6,7 +6,7 @@ const router = express.Router();
 const crypto = require('crypto');
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
-const { requireApiKey, requireUser } = require('../middleware/auth');
+const { requireUser } = require('../middleware/auth');
 const { encrypt, decrypt } = require('../utils/crypto');
 const { audit } = require('../middleware/audit');
 const { schemas, validate } = require('../utils/validate');
@@ -82,7 +82,7 @@ function verifyOAuthState(state) {
 
 // GET /api/email/gmail/auth
 // Returns the Google OAuth URL; frontend opens it in a popup
-router.get('/gmail/auth', requireApiKey, requireUser, (req, res) => {
+router.get('/gmail/auth', requireUser, (req, res) => {
   const oauth2Client = getGoogleOAuthClient();
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -175,7 +175,7 @@ router.get('/gmail/callback', async (req, res) => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 // GET /api/email/outlook/auth
-router.get('/outlook/auth', requireApiKey, requireUser, (req, res) => {
+router.get('/outlook/auth', requireUser, (req, res) => {
   const params = new URLSearchParams({
     client_id: process.env.MICROSOFT_CLIENT_ID,
     response_type: 'code',
@@ -273,7 +273,7 @@ router.get('/outlook/callback', async (req, res) => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 // GET /api/email/accounts
-router.get('/accounts', requireApiKey, requireUser, async (req, res) => {
+router.get('/accounts', requireUser, async (req, res) => {
   const { data, error } = await supabase
     .from('email_accounts')
     .select('id, provider, email, display_name, is_primary, created_at')
@@ -285,7 +285,7 @@ router.get('/accounts', requireApiKey, requireUser, async (req, res) => {
 });
 
 // PATCH /api/email/accounts/:id/set-primary
-router.patch('/accounts/:id/set-primary', requireApiKey, requireUser, async (req, res) => {
+router.patch('/accounts/:id/set-primary', requireUser, async (req, res) => {
   const { id } = req.params;
 
   await supabase
@@ -304,7 +304,7 @@ router.patch('/accounts/:id/set-primary', requireApiKey, requireUser, async (req
 });
 
 // POST /api/email/sync — trigger Gmail thread sync for current user
-router.post('/sync', requireApiKey, requireUser, async (req, res) => {
+router.post('/sync', requireUser, async (req, res) => {
   try {
     const result = await syncGmailForUser(req.userId);
     audit(req.userId, 'email.sync', { meta: result, req });
@@ -316,7 +316,7 @@ router.post('/sync', requireApiKey, requireUser, async (req, res) => {
 });
 
 // GET /api/email/threads/:accountId — get synced threads for an account
-router.get('/threads/:accountId', requireApiKey, requireUser, async (req, res) => {
+router.get('/threads/:accountId', requireUser, async (req, res) => {
   try {
     const { createClient } = require('@supabase/supabase-js');
     const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -334,7 +334,7 @@ router.get('/threads/:accountId', requireApiKey, requireUser, async (req, res) =
 });
 
 // DELETE /api/email/accounts/:id
-router.delete('/accounts/:id', requireApiKey, requireUser, async (req, res) => {
+router.delete('/accounts/:id', requireUser, async (req, res) => {
   const { error } = await supabase
     .from('email_accounts')
     .delete()
@@ -351,7 +351,7 @@ router.delete('/accounts/:id', requireApiKey, requireUser, async (req, res) => {
 
 // POST /api/email/send
 // Body: { accountId, to: [emails], subject, htmlBody, surveyId? }
-router.post('/send', requireApiKey, requireUser, validate(schemas.emailSend), async (req, res) => {
+router.post('/send', requireUser, validate(schemas.emailSend), async (req, res) => {
   const { accountId, to, subject, htmlBody, surveyId } = req.body;
 
   if (!accountId || !to?.length || !subject || !htmlBody) {
