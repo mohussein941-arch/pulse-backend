@@ -289,7 +289,7 @@ No UI exists for users to switch the primary email account between connected pro
 
 ---
 
-## Email account uniqueness — no DB-level enforcement of at-most-one-primary
+## RESOLVED (Session D3, commit 6d6ba59): Email account uniqueness — no DB-level enforcement of at-most-one-primary
 
 `is_primary` uniqueness per user is enforced only by application logic in the OAuth callbacks. Nothing prevents two rows for the same `user_id` from both having `is_primary = true`, which would cause `.maybeSingle()` in `sendAutomationEmail` to throw.
 
