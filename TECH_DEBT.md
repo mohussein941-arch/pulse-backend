@@ -423,10 +423,10 @@ The Tasks section in CloseoutModal shows the same empty-state message whether th
 
 ## Session A: backfill imprecision in migration_session_a_tasks_meeting_notes_id.sql
 
-The backfill logic in `migration_session_a_tasks_meeting_notes_id.sql` skips any `user_id` for which multiple distinct `closeout.tasks_accepted` resource IDs exist in `audit_log` at migration time (ambiguous mapping), leaving those tasks with `meeting_notes_id = NULL`.
+The backfill logic in `migration_session_a_tasks_meeting_notes_id.sql` is global, not per-user: if multiple distinct `closeout.tasks_accepted` resource IDs exist in `audit_log` at migration time (ambiguous mapping), the **entire backfill is skipped** — zero rows are updated, leaving all closeout-source tasks with `meeting_notes_id = NULL`. There is no partial-skip branch; the guard is all-or-nothing.
 
-**At Session A apply time:** confirmed only a single resource_id existed — backfill ran cleanly. No NULL orphans were introduced.
+**At Session A apply time:** confirmed only a single resource_id existed — backfill ran cleanly with zero NULL orphans introduced.
 
-**Document for future migrations of this shape:** if a second engineer runs a similar backfill after additional closeout sessions have accumulated audit rows, the skip condition may leave a larger tail of NULL rows. The skip-rather-than-guess behaviour is intentional but must be re-evaluated for each apply.
+**Document for future migrations of this shape:** as additional closeout sessions accumulate audit rows, the all-or-nothing skip condition becomes increasingly likely to trigger. Any re-run of this backfill shape must confirm a single unambiguous resource_id beforehand, or adopt a different strategy (e.g. per-user resolution, or an explicit resource_id parameter).
 
 **Triggers:** Any future migration touching `tasks.meeting_notes_id`, or if `meeting_notes_id IS NULL` rows appear in production after the Session A migration.
