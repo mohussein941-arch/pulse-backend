@@ -9,6 +9,20 @@ const { audit } = require('../middleware/audit');
 
 function todayStr() { return new Date().toISOString().split('T')[0]; }
 
+const SUGGESTED_ACTIONS = {
+  renewal_critical:    'Confirm renewal terms and send the agreement',
+  renewal_warning:     'Start the renewal conversation',
+  churn_risk_critical: 'Open a retention conversation to understand the risk',
+  health_critical:     'Schedule an urgent check-in on account health',
+  health_warning:      'Schedule a check-in on declining health',
+  health_declining:    'Check in early — health is trending down before the score shows it',
+  no_contact_critical: 'Reach out to re-establish contact',
+  no_contact_warning:  'Send a quick touch-base',
+  low_nps:             'Follow up on the low NPS and address the dissatisfaction',
+  task_overdue:        'Clear the overdue task',
+  task_due_today:      'Complete the task due today',
+};
+
 // GET /api/briefing/today — fetch today's briefing items (generates on demand if missing)
 router.get('/today', async (req, res, next) => {
   try {
@@ -42,6 +56,64 @@ router.get('/today', async (req, res, next) => {
     }
 
     res.json(items.map(shapeItem));
+  } catch (err) { next(err); }
+});
+
+// GET /api/briefing/priority — ranked accounts with top signal and suggested action
+router.get('/priority', async (req, res, next) => {
+  try {
+    const today = todayStr();
+
+    let { data: items } = await supabase
+      .from('briefing_items')
+      .select('*, accounts(name)')
+      .eq('user_id', req.userId)
+      .eq('briefing_date', today)
+      .eq('status', 'pending')
+      .order('current_score', { ascending: false });
+
+    // Generate on-demand if nothing exists yet today
+    if (!items || items.length === 0) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('id, email, full_name, briefing_config')
+        .eq('id', req.userId)
+        .maybeSingle();
+
+      if (profile) {
+        await generateBriefing(profile, today, profile.briefing_config || {});
+        const { data: fresh } = await supabase
+          .from('briefing_items')
+          .select('*, accounts(name)')
+          .eq('user_id', req.userId)
+          .eq('briefing_date', today)
+          .eq('status', 'pending')
+          .order('current_score', { ascending: false });
+        items = fresh || [];
+      }
+    }
+
+    const actionable = (items || []).filter(i => i.category !== 'win');
+
+    // Items are already ordered current_score DESC; first seen per account = highest score
+    const byAccount = new Map();
+    for (const item of actionable) {
+      if (!item.account_id) continue;
+      if (!byAccount.has(item.account_id)) byAccount.set(item.account_id, item);
+    }
+
+    const accounts = [...byAccount.values()]
+      .map(item => ({
+        account_id:       item.account_id,
+        account_name:     item.accounts?.name || null,
+        priority_score:   parseFloat(item.current_score),
+        signal_type:      item.signal_type,
+        reason:           item.signal_detail,
+        suggested_action: SUGGESTED_ACTIONS[item.signal_type] || 'Review the account',
+      }))
+      .sort((a, b) => b.priority_score - a.priority_score);
+
+    res.json({ accounts });
   } catch (err) { next(err); }
 });
 
