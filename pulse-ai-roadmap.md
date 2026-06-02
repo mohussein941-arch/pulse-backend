@@ -1,3 +1,5 @@
+> SUPERSEDED 2026-06-02 — see pulse-backend/ROADMAP.md (canonical CS Brain Roadmap). Retained for history only.
+
 # Pulse AI Roadmap
 
 Last updated: 2026-05-24
