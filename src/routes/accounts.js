@@ -10,6 +10,7 @@ const supabase = require("../supabase");
 const { calcHealth }      = require("../health");
 const { generateBrief }   = require("../engine/briefGenerator");
 const { synthesizeHealth } = require("../engine/healthSynthesis");
+const { generateHealthNarrative } = require("../engine/healthNarrative");
 
 const router = express.Router();
 
@@ -388,6 +389,15 @@ router.get("/:id/brief", async (req, res, next) => {
 router.get("/:id/health-synthesis", async (req, res, next) => {
   try {
     const result = await synthesizeHealth({ orgId: req.orgId, accountId: req.params.id, db: supabase });
+    if (!result) return res.status(404).json({ error: "Account not found" });
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/accounts/:id/health-narrative ───────────────────────────────────
+router.get("/:id/health-narrative", async (req, res, next) => {
+  try {
+    const result = await generateHealthNarrative({ orgId: req.orgId, accountId: req.params.id, userId: req.userId, db: supabase });
     if (!result) return res.status(404).json({ error: "Account not found" });
     res.json(result);
   } catch (err) { next(err); }
