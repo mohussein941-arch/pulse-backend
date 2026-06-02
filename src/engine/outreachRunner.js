@@ -12,6 +12,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { getContext }   = require('../services/context-engine/retrieval');
 const llm              = require('../services/llm');
+const { recommendPlaybook } = require('./playbookRecommender');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -225,7 +226,7 @@ async function buildOutreachDraft(account, triggerType, ctx, { orgId, userId }) 
       'Plain language, no citations, no bracketed placeholders, no markdown. ' +
       'Ground it in the provided history where relevant; never invent specifics that are not given. ' +
       'Return ONLY a JSON object with exactly two string keys: {"subject":"...","body":"..."}. ' +
-      'The body is 3-5 short sentences and ends with a sign-off from the CSM by name.';
+      'The body is 3-5 short sentences and ends with a sign-off from the CSM by name. If a recommended success play is provided, anchor the email on proposing that specific play and its value.';
 
     const user =
       `Trigger reason: ${triggerType}\n` +
@@ -233,6 +234,7 @@ async function buildOutreachDraft(account, triggerType, ctx, { orgId, userId }) 
       `Recipient first name: ${ctx.contactFirstName}\n` +
       `CSM name: ${ctx.csmName}\n` +
       (ctx.lastSurveyType ? `Most recent ${ctx.lastSurveyType} score: ${ctx.lastSurveyScore}\n` : '') +
+      (ctx.recommendedPlaybook ? `Recommended success play to propose: "${ctx.recommendedPlaybook.name}" — ${ctx.recommendedPlaybook.reason}\n` : '') +
       `\nRecent interaction history:\n${history || '(none available)'}\n\n` +
       'Write the outreach email now as the JSON object.';
 
@@ -325,6 +327,12 @@ async function runOutreachForUser(userId, accounts) {
 
     for (const triggerType of signals) {
       if (await recentlyQueued(userId, account.id, triggerType)) continue;
+
+      ctx.recommendedPlaybook = null;
+      if (triggerType === 'playbook_suggested') {
+        try { ctx.recommendedPlaybook = await recommendPlaybook({ orgId: account.org_id, accountId: account.id, db: supabase }); }
+        catch (_) { /* non-fatal */ }
+      }
 
       const draft = await buildOutreachDraft(account, triggerType, ctx, { orgId: account.org_id, userId });
 
