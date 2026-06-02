@@ -9,6 +9,7 @@ const supabase = require("../supabase");
 const { CONNECTORS } = require("../connectors");
 const { calcHealth  } = require("../health");
 const { encrypt, decrypt } = require("../utils/crypto");
+const { writeInteraction } = require("../services/context-engine/ingestion");
 
 const router = express.Router();
 
@@ -139,18 +140,47 @@ router.post("/run", async (req, res, next) => {
           external_id:  record.externalId,
         };
 
+        let accountId = null; let changed = null;
+
         if (existing) {
           if (existing.open_tickets !== record.openTickets
             || existing.last_contact !== record.lastContact) {
             await supabase.from("accounts").update(row)
               .eq("id", existing.id).eq("org_id", req.orgId);
-            updated++;
+            accountId = existing.id; changed = 'updated'; updated++;
           } else {
-            skipped++;
+            changed = 'skipped'; skipped++;
           }
         } else {
-          await supabase.from("accounts").insert(row);
-          created++;
+          const { data: inserted } = await supabase.from("accounts").insert(row).select("id").single();
+          accountId = inserted?.id; changed = 'created'; created++;
+        }
+
+        if (accountId && (changed === 'created' || changed === 'updated')) {
+          try {
+            const renewalNote = record.renewalDate ? `, renewal ${record.renewalDate}` : '';
+            await writeInteraction({
+              orgId:     req.orgId,
+              accountId,
+              source:    'crm_event',
+              direction: 'internal',
+              content:   `CRM ${changed === 'created' ? 'new account' : 'update'} (${record.source}): ${record.name} — ARR ${record.arr || 0}, ${record.openTickets || 0} open tickets${renewalNote}`,
+              metadata: {
+                connector_id:       connectorId,
+                provider_source:    record.source,
+                provider_object_id: record.externalId,
+                arr:                record.arr || 0,
+                open_tickets:       record.openTickets || 0,
+                renewal_date:       record.renewalDate || null,
+                last_contact:       record.lastContact || null,
+                change:             changed,
+              },
+              externalId: `crm_${connectorId}_${record.externalId}_${new Date().toISOString().slice(0, 10)}`,
+              createdBy:  req.userId,
+            });
+          } catch (e) {
+            errors.push(`crm_event "${record.name}": ${e.message}`);
+          }
         }
       } catch (e) {
         errors.push(`"${record.name}": ${e.message}`);
