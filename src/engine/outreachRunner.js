@@ -21,6 +21,9 @@ const supabase = createClient(
 
 const QUEUE_COOLDOWN_DAYS = 7;
 
+const daysSince = d => d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : Infinity;
+const daysUntil = d => d ? Math.floor((new Date(d).getTime() - Date.now()) / 86400000) : Infinity;
+
 // ─── Template engine ─────────────────────────────────────────────────────────
 // AI_HOOK: replace this entire function with an AI call once the AI layer lands.
 // The function signature, inputs, and return shape { subject, body } stay the same —
@@ -175,8 +178,6 @@ ${csm}`,
 // after stakeholder data is loaded, since detectSignals doesn't have that context.
 function detectSignals(account) {
   const signals   = [];
-  const daysSince = d => d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : Infinity;
-  const daysUntil = d => d ? Math.floor((new Date(d).getTime() - Date.now()) / 86400000) : Infinity;
 
   if ((account.health_score ?? 100) < 45)                                 signals.push('health_drop');
   if (daysSince(account.last_contact) >= 21)                              signals.push('no_contact');
