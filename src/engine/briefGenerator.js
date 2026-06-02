@@ -15,6 +15,7 @@ const { buildBriefPrompt, promptVersionHash, BRIEF_MODEL } = require('./briefPro
 const { dataStateHash }                                    = require('./dataStateHash');
 const { validateBriefOutput, BriefValidationError }        = require('./briefValidator');
 const defaultSupabase                                       = require('../supabase');
+const { getContext }                                        = require('../services/context-engine/retrieval');
 
 // Lazy singleton — avoids requiring ANTHROPIC_API_KEY at module load time
 let _anthropic = null;
@@ -188,6 +189,22 @@ async function generateBrief({ orgId, accountId, userId, supabaseClient }) {
 
   if (cached) {
     return { content: cached.content, fromCache: true };
+  }
+
+  // M0.1 — replace the recency context with relevance-ranked retrieval, for the prompt only.
+  // dsHash is already computed above from loadContext's deterministic set, so the cache key
+  // is unaffected. getContext runs only here (cache miss), never on a cache hit.
+  try {
+    const retrieval = await getContext(
+      `Pre-meeting context for ${context.account.name}: recent activity, open risks, blockers, sentiment, renewal status, and outstanding commitments`,
+      { orgId, accountId, limit: 12, createdBy: userId }
+    );
+    if (retrieval?.interactions?.length) {
+      context.interactions = retrieval.interactions;
+    }
+  } catch (err) {
+    // Non-fatal: keep the recency context loadContext already provided.
+    console.warn(`[brief] getContext failed, using recency context: ${err.message}`);
   }
 
   // 4. Build validation sets from loaded context
