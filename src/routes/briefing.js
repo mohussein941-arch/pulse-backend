@@ -237,8 +237,9 @@ function shapeItem(i) {
     baseScore:    parseFloat(i.base_score),
     carryDays:    i.carry_days,
     currentScore: parseFloat(i.current_score),
-    status:       i.status,
-    snoozedUntil: i.snoozed_until || null,
+    status:          i.status,
+    snoozedUntil:    i.snoozed_until || null,
+    suggestedAction: i.category === 'win' ? null : (SUGGESTED_ACTIONS[i.signal_type] || 'Review the account'),
   };
 }
 
