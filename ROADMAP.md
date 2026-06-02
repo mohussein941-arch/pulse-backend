@@ -22,7 +22,7 @@ Three scope shifts left two conflicting roadmaps in the repo:
 
 ## The core problem this roadmap fixes
 
-The brain is built but mostly unused. The Context Engine's retrieval half (`getContext`) feeds exactly one feature (closeout). Its reasoning/citation half (`reason`) has zero callers. The briefing and brief surfaces still run on the legacy BYOK path, bypassing the engine entirely. Every milestone below is sequenced so that the brain stops being dead weight and starts powering features.
+The brain is partly adopted, not abandoned. `getContext` (retrieval) already powers closeout and should be extended to the Account Brief, which today retrieves by recency rather than relevance. `reason()` (narrative synthesis) is built ahead of its consumers — the health narrative (M4.2) and catch-me-up (M7) — so its zero callers is expected, not neglect. The one genuine legacy bypass is the daily briefing-summary, still on per-user BYOK. And no CRM signal reaches the timeline at all. Milestone 0 closes these specific gaps; everything after assumes the brain is the substrate.
 
 ---
 
@@ -34,12 +34,12 @@ The brain is built but mostly unused. The Context Engine's retrieval half (`getC
 | M1 Context Engine substrate | **Done** | `interactions`, `interaction_embeddings`, `ai_traces`, `llm` service (classify/reason/embed, server-side keys), cost tracking, feedback collection |
 | Embedding worker | **Done, live** | In-process + 30s poll; has run live against OpenAI (7/7 interactions embedded) |
 | `getContext()` retrieval | **Built, 1 caller** | 6-stage hybrid pipeline; called only by closeout |
-| `reason()` cited synthesis | **Built, 0 callers** | Finished code wired to nothing |
+| `reason()` cited synthesis | **Built, awaiting consumers** | Narrative-synthesis primitive (prose + citation IDs); serves M4.2 health narrative and M7 catch-me-up, not structured features. 0 callers is expected until those ship |
 | Ingestion engines | **Done** | Fireflies → `call_transcript`, Gmail → `email_thread`, calendar → `calendar_event` |
 | Email OAuth (Gmail send) | **Done** | Encrypted tokens; one-primary-per-user enforced at DB level |
 | M3 Post-meeting closeout | **Shipped** | Uses `getContext` (retrieval) but NOT `reason` (no citations); writes health_signal/internal_note interactions, tasks, audit_log |
 | Daily briefing | **Partial** | Rule-scored `briefing_items` (77 rows) + LLM narrative via legacy BYOK — bypasses the engine |
-| Account Brief panel | **Partial** | Frontend shipped; `briefs` table exists; generation path does NOT go through `getContext`/`reason` |
+| Account Brief | **Built, server-side** | Full pipeline: server-side key, 6-key 24h cache, schema validation + retry, `ai_traces` cost tracking; frontend panel live with lazy fetch. Only gap: retrieves by recency, not via `getContext` |
 | Outreach + digest engines | **Built, dormant** | Tables, runners, CRUD+send all exist; 0 rows; never switched on |
 | HubSpot CRM read-sync | **Built, real, not live** | Real OAuth + API-key sync (companies + Service Hub tickets) via `src/connectors`; region-aware. Read-only. Writes to `accounts`, NOT to the timeline. 0 rows configured in prod |
 
@@ -55,14 +55,15 @@ The brain is built but mostly unused. The Context Engine's retrieval half (`getC
 
 M1–M3 numbering is preserved (they are real, shipped, and referenced in code/docs). M4 onward is renumbered cleanly to end the old conflict, and resequenced by dependency rather than copied from either prior doc.
 
-### Milestone 0 — Connect the brain *(prerequisite for everything below)*
+### Milestone 0 — Connect the brain *(prerequisite for the brain-visible features)*
 
-Make "AI feature" mean one thing: `getContext` → `reason` → cited output → `ai_traces` cost row. Retire the legacy BYOK path as features migrate onto the engine.
+`getContext` is the universal retrieval primitive — every feature needing account history should retrieve through it. `reason()` is the narrative-synthesis primitive, and its consumers are the free-text features (M4.2 health narrative, M7 catch-me-up); structured features (brief, closeout) retrieve via `getContext` and generate with their own validated prompts. Closeout already follows this pattern, and the Account Brief already runs on a server-side key, cached and cost-traced — so "connect the brain" is a short list, not a rebuild.
 
-- **0.1 — Account Brief through the engine.** Back the already-built Brief panel with `getContext` + `reason` (cited, server-side key, cost-tracked). This completes M2 *properly* and is the first feature to use both halves of the brain. Highest existing scaffolding, lowest new surface area — the right first proof.
-- **0.2 — Closeout gets the reasoning layer.** Closeout already retrieves via `getContext`; add `reason()` so its output is cited and auditable like every other engine feature.
-- **0.3 — Retire BYOK for briefing-summary.** Migrate it onto the engine, OR deliberately fold it into the Priority Queue (M5) and sunset it. Decision at M5 scope time.
-- **0.4 — Route HubSpot sync into the timeline.** The connector output already lands in `accounts`; also write it through `writeInteraction({ source: 'crm_event' })` so CRM companies and tickets become retrievable, reason-able timeline signals. This is what makes the brain CRM-aware, and it reuses an integration that already works.
+- **0.1 — Account Brief retrieves via `getContext`.** Today `briefGenerator.loadContext` pulls the 20 most recent interactions by date — pure recency. Swap that for a `getContext` call shaped like closeout's (lines 215–221), so the brief is relevance-ranked and surfaces important older context the recency window drops. Keep the structured prompt, schema validation, 6-key cache, and cost tracing untouched. *Invisible until accounts carry real history; pairs with 0.2.*
+- **0.2 — Route HubSpot sync into the timeline (`crm_event`).** The connector output lands in `accounts` today; also write it through `writeInteraction({ source: 'crm_event' })` so CRM companies and tickets become retrievable timeline signals. This is the new signal that makes 0.1 visible — once CRM data flows in, the brief's `getContext` can surface it. Reuses an integration that already works.
+- **0.3 — Retire or migrate briefing-summary BYOK.** The daily briefing narrative (`/api/ai/briefing-summary`) is the lone remaining legacy BYOK feature. Migrate it onto the engine, OR fold it into the Priority Queue (M5) and sunset it. Decide at M5 scope time.
+
+Closeout already retrieves via `getContext` and generates with a validated prompt; no change needed there.
 
 ### Milestone 4 — Health synthesis + narrative
 
@@ -109,7 +110,7 @@ These don't build the brain but block onboarding a real customer:
 
 ## Decisions needed
 
-1. **CRM write-back (the only greenfield CRM piece): build now or post-launch?** Read-sync is already real. Write-back (push deal stage / notes to HubSpot) is the missing direction. *Architect recommendation: post-launch and customer-triggered — read-sync plus feeding the brain (M0.4) is the higher-value work first.*
+1. **CRM write-back (the only greenfield CRM piece): build now or post-launch?** Read-sync is already real. Write-back (push deal stage / notes to HubSpot) is the missing direction. *Architect recommendation: post-launch and customer-triggered — read-sync plus feeding the brain (M0.2) is the higher-value work first.*
 2. **briefing-summary at M5: migrate onto the engine, or sunset in favor of the Priority Queue?** Decide when scoping M5.
 3. **Channel expansion trigger.** Confirm it stays horizontal/customer-driven rather than entering the M4–M7 sequence.
 
