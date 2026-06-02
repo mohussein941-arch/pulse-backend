@@ -6,6 +6,7 @@ const { createClient }       = require('@supabase/supabase-js');
 const { google }             = require('googleapis');
 const { scanAccountSignals, scanTaskSignals, scanWins, currentScore, THRESHOLD, todayStr } = require('./briefingSignals');
 const { buildBriefingEmail } = require('./briefingEmail');
+const { synthesizeHealth }   = require('./healthSynthesis');
 const { decrypt, encrypt }   = require('../utils/crypto');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -74,7 +75,7 @@ async function generateBriefing(profile, today, cfg) {
   const { data: accounts } = await supabase
     .from('accounts')
     .select(`
-      id, name, health_score, churn_risk, nps, ces, product_usage,
+      id, name, org_id, health_score, churn_risk, nps, ces, product_usage,
       open_tickets, renewal_date, last_contact, stage,
       activity_log ( type, logged_at ),
       milestones   ( id, text, done )
@@ -130,11 +131,32 @@ async function generateBriefing(profile, today, cfg) {
   const freshTaskSignals    = scanTaskSignals(tasks || []);
   const freshWins           = scanWins(accounts || [], shapedResponses);
 
+  // ── 5b. M5.1 — trend-aware early warning ──────────────────────────────
+  // synthesizeHealth is DB-only (no LLM). Surfaces accounts declining BEFORE
+  // they cross the static health_score thresholds. Failure is non-fatal.
+  const freshTrendSignals = [];
+  for (const a of (accounts || [])) {
+    try {
+      const synth = await synthesizeHealth({ orgId: a.org_id, accountId: a.id, db: supabase });
+      if (synth && synth.trend === 'declining') {
+        freshTrendSignals.push({
+          accountId:    a.id,
+          accountName:  a.name,
+          signalType:   'health_declining',
+          signalDetail: `Health trending down (momentum ${synth.momentum.label}, ${synth.momentum.signal_count} recent signal${synth.momentum.signal_count === 1 ? '' : 's'})`,
+          baseScore:    6,
+        });
+      }
+    } catch (e) {
+      // Non-fatal: a synthesis failure must not break the daily briefing.
+    }
+  }
+
   // ── 6. Merge carry-forward with fresh signals ─────────────────────────
   const itemsToInsert = [];
   const carryMap = new Map(carryPool.map(i => [i.signal_type + ':' + (i.account_id || i.signal_detail), i]));
 
-  for (const sig of [...freshAccountSignals, ...freshTaskSignals]) {
+  for (const sig of [...freshAccountSignals, ...freshTrendSignals, ...freshTaskSignals]) {
     const key = sig.signalType + ':' + (sig.accountId || sig.signalDetail);
     const carried = carryMap.get(key);
     const carryDays = carried ? (carried.carry_days + 1) : 0;
