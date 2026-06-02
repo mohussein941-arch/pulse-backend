@@ -12,6 +12,7 @@ const { generateBrief }   = require("../engine/briefGenerator");
 const { synthesizeHealth } = require("../engine/healthSynthesis");
 const { generateHealthNarrative } = require("../engine/healthNarrative");
 const { recommendPlaybook } = require("../engine/playbookRecommender");
+const { generateCatchUp } = require("../engine/catchUp");
 
 const router = express.Router();
 
@@ -399,6 +400,15 @@ router.get("/:id/health-synthesis", async (req, res, next) => {
 router.get("/:id/health-narrative", async (req, res, next) => {
   try {
     const result = await generateHealthNarrative({ orgId: req.orgId, accountId: req.params.id, userId: req.userId, db: supabase });
+    if (!result) return res.status(404).json({ error: "Account not found" });
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/accounts/:id/catch-up ───────────────────────────────────────────
+router.get("/:id/catch-up", async (req, res, next) => {
+  try {
+    const result = await generateCatchUp({ orgId: req.orgId, accountId: req.params.id, userId: req.userId, db: supabase });
     if (!result) return res.status(404).json({ error: "Account not found" });
     res.json(result);
   } catch (err) { next(err); }
