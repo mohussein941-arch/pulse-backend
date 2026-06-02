@@ -11,6 +11,7 @@ const { calcHealth }      = require("../health");
 const { generateBrief }   = require("../engine/briefGenerator");
 const { synthesizeHealth } = require("../engine/healthSynthesis");
 const { generateHealthNarrative } = require("../engine/healthNarrative");
+const { recommendPlaybook } = require("../engine/playbookRecommender");
 
 const router = express.Router();
 
@@ -400,6 +401,14 @@ router.get("/:id/health-narrative", async (req, res, next) => {
     const result = await generateHealthNarrative({ orgId: req.orgId, accountId: req.params.id, userId: req.userId, db: supabase });
     if (!result) return res.status(404).json({ error: "Account not found" });
     res.json(result);
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/accounts/:id/recommended-playbook ───────────────────────────────
+router.get("/:id/recommended-playbook", async (req, res, next) => {
+  try {
+    const result = await recommendPlaybook({ orgId: req.orgId, accountId: req.params.id, db: supabase });
+    res.json(result || { recommendation: null });
   } catch (err) { next(err); }
 });
 
