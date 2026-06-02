@@ -10,6 +10,8 @@
 // The outreach_queue.ai_generated flag will be set to true at that point.
 
 const { createClient } = require('@supabase/supabase-js');
+const { getContext }   = require('../services/context-engine/retrieval');
+const llm              = require('../services/llm');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -204,6 +206,51 @@ async function recentlyQueued(userId, accountId, triggerType) {
   return !!data;
 }
 
+// ─── AI draft builder (falls back to template on any failure) ────────────────
+async function buildOutreachDraft(account, triggerType, ctx, { orgId, userId }) {
+  try {
+    let history = '';
+    try {
+      const retrieved = await getContext(
+        `Recent interactions, open issues, and discussion topics for ${account.name} relevant to: ${triggerType}`,
+        { orgId, accountId: account.id, limit: 8, createdBy: userId }
+      );
+      history = (retrieved.interactions || [])
+        .map((i, n) => `(${n + 1}) [${i.source}] ${i.summary || i.content || ''}`.trim())
+        .join('\n');
+    } catch (_) { /* no history — proceed without */ }
+
+    const system =
+      'You are a Customer Success Manager writing a short, warm, professional outreach email to a customer. ' +
+      'Plain language, no citations, no bracketed placeholders, no markdown. ' +
+      'Ground it in the provided history where relevant; never invent specifics that are not given. ' +
+      'Return ONLY a JSON object with exactly two string keys: {"subject":"...","body":"..."}. ' +
+      'The body is 3-5 short sentences and ends with a sign-off from the CSM by name.';
+
+    const user =
+      `Trigger reason: ${triggerType}\n` +
+      `Account: ${account.name}\n` +
+      `Recipient first name: ${ctx.contactFirstName}\n` +
+      `CSM name: ${ctx.csmName}\n` +
+      (ctx.lastSurveyType ? `Most recent ${ctx.lastSurveyType} score: ${ctx.lastSurveyScore}\n` : '') +
+      `\nRecent interaction history:\n${history || '(none available)'}\n\n` +
+      'Write the outreach email now as the JSON object.';
+
+    const { output } = await llm.reason({
+      orgId, feature: 'outreach_draft', system, user,
+      maxTokens: 600, accountId: account.id, createdBy: userId,
+    });
+
+    const cleaned = String(output).replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+    if (!parsed.subject || !parsed.body) throw new Error('incomplete draft');
+    return { subject: String(parsed.subject), body: String(parsed.body), aiGenerated: true };
+  } catch (_) {
+    const t = buildDraft(account, triggerType, ctx); // template fallback — never worse than today
+    return { subject: t.subject, body: t.body, aiGenerated: false };
+  }
+}
+
 // ─── Process one user ─────────────────────────────────────────────────────────
 async function runOutreachForUser(userId, accounts) {
   const { data: profile } = await supabase
@@ -279,10 +326,11 @@ async function runOutreachForUser(userId, accounts) {
     for (const triggerType of signals) {
       if (await recentlyQueued(userId, account.id, triggerType)) continue;
 
-      const draft = buildDraft(account, triggerType, ctx);
+      const draft = await buildOutreachDraft(account, triggerType, ctx, { orgId: account.org_id, userId });
 
       await supabase.from('outreach_queue').insert({
         user_id:         userId,
+        org_id:          account.org_id,
         account_id:      account.id,
         account_name:    account.name,
         trigger_type:    triggerType,
@@ -291,7 +339,7 @@ async function runOutreachForUser(userId, accounts) {
         recipient_email: ctx.recipientEmail,
         recipient_name:  ctx.recipientName,
         status:          'pending',
-        ai_generated:    false, // AI_HOOK: flip to true when callAI is used
+        ai_generated:    draft.aiGenerated,
         metadata: {
           health_score:        account.health_score,
           nps:                 account.nps,
@@ -328,7 +376,7 @@ async function runOutreachRunner() {
     for (const userId of userIds) {
       const { data: accounts } = await supabase
         .from('accounts')
-        .select('id, name, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, active_playbook_id, created_at')
+        .select('id, name, org_id, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, active_playbook_id, created_at')
         .eq('user_id', userId)
         .eq('archived', false);
 
