@@ -29,6 +29,7 @@ async function generateHealthNarrative({ orgId, accountId, userId, db = defaultS
     narrative:    result.output,
     citation_ids: result.citationIds,
     trace_id:     result.traceId,
+    citations:    result.citations,
     synthesis,
   };
 }

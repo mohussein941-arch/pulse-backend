@@ -30,6 +30,7 @@ async function generateCatchUp({ orgId, accountId, userId, db = defaultSupabase 
     narrative:    result.output,
     citation_ids: result.citationIds,
     trace_id:     result.traceId,
+    citations:    result.citations,
     synthesis,
   };
 }

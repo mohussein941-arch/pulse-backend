@@ -56,7 +56,7 @@ async function generateHandoffPacket({ orgId, accountId, userId, db = defaultSup
     open_tasks:           openTasks || [],
     active_playbook:      activePlaybook,
     recommended_playbook: recommendation,
-    recap:                recap ? { narrative: recap.narrative, citation_ids: recap.citation_ids } : null,
+    recap:                recap ? { narrative: recap.narrative, citation_ids: recap.citation_ids, citations: recap.citations } : null,
     generated_at:         new Date().toISOString(),
     generated_by:         userId,
   };

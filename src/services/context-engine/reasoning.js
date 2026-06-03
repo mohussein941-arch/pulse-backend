@@ -30,6 +30,7 @@ async function reason(context, task, { orgId, feature, accountId, createdBy, max
       output:      'No relevant context found for this request.',
       citationIds: [],
       traceId:     null,
+      citations:   [],
     };
   }
 
@@ -42,6 +43,14 @@ async function reason(context, task, { orgId, feature, accountId, createdBy, max
   }).join('\n\n---\n\n');
 
   const citationMap = interactions.map((i, idx) => `[${idx + 1}] = interaction ID ${i.id}`).join('\n');
+
+  const citations = interactions.map((i, idx) => ({
+    marker:      idx + 1,
+    id:          i.id,
+    source:      i.source ?? null,
+    occurred_at: i.occurred_at ?? null,
+    snippet:     (i.summary || i.content || '').slice(0, 180),
+  }));
 
   const { output, traceId } = await llm.reason({
     orgId,
@@ -63,7 +72,7 @@ Citation map:
 ${citationMap}`,
   });
 
-  return { output, citationIds, traceId };
+  return { output, citationIds, traceId, citations };
 }
 
 module.exports = { reason };
