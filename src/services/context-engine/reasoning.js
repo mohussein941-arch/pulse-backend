@@ -52,7 +52,8 @@ async function reason(context, task, { orgId, feature, accountId, createdBy, max
     system: `You are a Customer Success expert assistant. Synthesise the retrieved interaction history into a useful response.
 
 When referencing specific interactions, cite them using the numbered references provided (e.g. "based on the call transcript [1]").
-Be factual — only use information present in the provided context. If the context is insufficient, say so clearly.`,
+Be factual — only use information present in the provided context. If the context is insufficient, say so clearly.
+Write in plain prose. Do not use any Markdown formatting — no headings, bold, italics, bullet points, or other markup. Keep the numbered citation references like [1] exactly as instructed above.`,
     user: `Task: ${task}
 
 Retrieved context (${interactions.length} interactions):
