@@ -2,7 +2,7 @@ const express  = require("express");
 const crypto   = require("crypto");
 const supabase = require("../supabase");
 const { calcHealth } = require("../health");
-const { calculateUsageScore } = require("../services/usage");
+const { writeUsageSnapshot } = require("../services/usage");
 
 async function matchAccount(userId, accountKey) {
   // Match order: domain → name (case-insensitive) → external_id
@@ -15,55 +15,6 @@ async function matchAccount(userId, accountKey) {
     if (data) return data;
   }
   return null;
-}
-
-// ── Shared usage write: score + health + persist. Used by the summary webhook
-//    AND the daily event tally, so the math lives in exactly one place. ────────
-async function writeUsageSnapshot(account, metrics) {
-  const usageScore = calculateUsageScore(metrics);
-  if (usageScore === null)                return { status: "skipped", reason: "no usable metrics provided" };
-  if (usageScore < 0 || usageScore > 100) return { status: "skipped", reason: "calculated score out of 0-100 range" };
-
-  const { healthScore, churnRisk, stage } = calcHealth({
-    nps:          account.nps          || 50,
-    ces:          account.ces          || 3.5,
-    productUsage: usageScore,
-    openTickets:  account.open_tickets || 0,
-  });
-
-  const now = new Date().toISOString();
-
-  await Promise.all([
-    supabase.from("accounts").update({
-      product_usage:            usageScore,
-      product_usage_updated_at: now,
-      health_score:             healthScore,
-      churn_risk:               churnRisk,
-      stage,
-    }).eq("id", account.id).eq("org_id", account.org_id),
-
-    supabase.from("usage_history").insert({
-      org_id:              account.org_id,            // ← fixes the NOT NULL omission that broke ingestion
-      user_id:             account.user_id,
-      account_id:          account.id,
-      product_usage:       usageScore,
-      active_users:        metrics.active_users        ?? null,
-      licensed_seats:      metrics.licensed_seats      ?? null,
-      dau:                 metrics.dau                 ?? null,
-      mau:                 metrics.mau                 ?? null,
-      wau:                 metrics.wau                 ?? null,
-      features_used_count: metrics.features_used_count ?? null,
-      total_features:      metrics.total_features      ?? null,
-      sessions_last_30d:   metrics.sessions_last_30d   ?? null,
-      last_active_at:      metrics.last_active_at      ?? null,
-      events_count:        metrics.events_count        ?? null,
-      key_events:          metrics.key_events          ?? null,
-      raw_payload:         metrics.raw_payload         ?? null,
-      recorded_at:         now,
-    }),
-  ]);
-
-  return { status: "updated", product_usage: usageScore, health_score: healthScore };
 }
 
 async function processItem(userId, item) {
