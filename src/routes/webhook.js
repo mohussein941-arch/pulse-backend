@@ -42,7 +42,7 @@ async function matchAccount(userId, accountKey) {
   for (const [col, exact] of [["domain", false], ["name", false], ["external_id", true]]) {
     const q = supabase
       .from("accounts")
-      .select("id, nps, ces, open_tickets")
+      .select("id, org_id, nps, ces, open_tickets")
       .eq("user_id", userId);
     const { data } = await (exact ? q.eq(col, accountKey) : q.ilike(col, accountKey)).maybeSingle();
     if (data) return data;
@@ -134,6 +134,86 @@ publicRouter.post("/:token", async (req, res) => {
     res.json({ received: items.length, updated, not_found: notFound, skipped, results });
   } catch (err) {
     console.error("[Webhook]", err.message);
+    res.status(500).json({ error: "Internal error" });
+  }
+});
+
+// ── Usage events intake — raw "receipts", appended to usage_events ────────────
+async function insertUsageEvents(userId, body) {
+  const events = Array.isArray(body) ? body : [body];
+  const skipped = [];
+  const accountCache = new Map();
+  const valid = [];
+
+  for (const e of events) {
+    const accountKey = e.account;
+    const eventName  = e.event || e.event_name;
+    if (!accountKey) { skipped.push({ status: "skipped", reason: "missing `account`" }); continue; }
+    if (!eventName)  { skipped.push({ account: accountKey, status: "skipped", reason: "missing `event`" }); continue; }
+
+    let account = accountCache.get(accountKey);
+    if (account === undefined) {
+      account = await matchAccount(userId, accountKey);
+      accountCache.set(accountKey, account);
+    }
+    if (!account) { skipped.push({ account: accountKey, status: "not_found" }); continue; }
+
+    valid.push({
+      org_id:      account.org_id,
+      user_id:     userId,
+      account_id:  account.id,
+      user_ref:    e.user_ref ?? null,
+      event_name:  eventName,
+      occurred_at: e.occurred_at ? new Date(e.occurred_at).toISOString() : new Date().toISOString(),
+      properties:  e.properties ?? null,
+      session_id:  e.session_id ?? null,
+      event_id:    e.event_id ?? null,
+    });
+  }
+
+  // Dedup by event_id (one user → one org, so all valid rows share org_id).
+  const seen = new Set();
+  const idRows = valid.filter(r => r.event_id != null);
+  if (idRows.length > 0) {
+    const orgId = idRows[0].org_id;
+    const ids   = [...new Set(idRows.map(r => r.event_id))];
+    const { data: existing } = await supabase
+      .from("usage_events").select("event_id").eq("org_id", orgId).in("event_id", ids);
+    for (const r of (existing || [])) seen.add(r.event_id);
+  }
+  let deduped = 0;
+  const toInsert = valid.filter(r => {
+    if (r.event_id == null) return true;
+    if (seen.has(r.event_id)) { deduped++; return false; }
+    seen.add(r.event_id);
+    return true;
+  });
+
+  let inserted = 0;
+  if (toInsert.length > 0) {
+    const { error } = await supabase.from("usage_events").insert(toInsert);
+    if (error) throw error;
+    inserted = toInsert.length;
+  }
+
+  return {
+    inserted,
+    deduped,
+    not_found: skipped.filter(s => s.status === "not_found").length,
+    skipped:   skipped.filter(s => s.reason).length,
+  };
+}
+
+publicRouter.post("/events/:token", async (req, res) => {
+  try {
+    const { data: wh } = await supabase
+      .from("user_webhooks").select("user_id").eq("token", req.params.token).maybeSingle();
+    if (!wh) return res.status(401).json({ error: "Invalid webhook token" });
+
+    const result = await insertUsageEvents(wh.user_id, req.body);
+    res.json({ received: Array.isArray(req.body) ? req.body.length : 1, ...result });
+  } catch (err) {
+    console.error("[Usage Events]", err.message);
     res.status(500).json({ error: "Internal error" });
   }
 });
