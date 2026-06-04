@@ -53,6 +53,8 @@ router.get("/", async (req, res, next) => {
                       .map(h => ({ date: h.recorded_at, score: h.score })),
       productUsage:          a.product_usage || 60,
       productUsageUpdatedAt: a.product_usage_updated_at || null,
+      licensedSeats:         a.licensed_seats    ?? null,
+      licensedFeatures:      a.licensed_features ?? null,
       openTickets:  a.open_tickets || 0,
       healthScore:  a.health_score ?? 50,
       churnRisk:    a.churn_risk   ?? 50,
@@ -183,6 +185,8 @@ router.patch("/:id", async (req, res, next) => {
       successGoal: "success_goal", activePlaybookId: "active_playbook_id",
       activePlaybookSteps: "active_playbook_steps", snoozedPlaybooks: "snoozed_playbooks",
       domain: "domain",
+      licensedSeats:    "licensed_seats",
+      licensedFeatures: "licensed_features",
       // Expansion
       expansionPotential: "expansion_potential",
       expansionArr:       "expansion_arr",
@@ -346,7 +350,7 @@ router.get("/:id/usage-history", async (req, res, next) => {
   try {
     const { data, error } = await supabase
       .from("usage_history")
-      .select("product_usage, active_users, licensed_seats, dau, mau, features_used_count, total_features, sessions_last_30d, recorded_at")
+      .select("product_usage, active_users, licensed_seats, dau, mau, wau, features_used_count, total_features, sessions_last_30d, last_active_at, events_count, key_events, recorded_at")
       .eq("account_id", req.params.id)
       .eq("org_id", req.orgId)
       .order("recorded_at", { ascending: false })
