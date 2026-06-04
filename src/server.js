@@ -58,6 +58,7 @@ const { runCalendarSync }      = require("./engine/calendarIngestion");
 const { runOutreachRunner }    = require("./engine/outreachRunner");
 const { runSurveyScheduler }   = require("./engine/surveyScheduler");
 const { runDigestRunner }      = require("./engine/digestRunner");
+const { runUsageTally }        = require("./engine/usageTally");
 const { requireUser } = require("./middleware/auth");
 const { startEmbeddingWorker } = require("./services/context-engine/embedding");
 const aiFeedbackRouter         = require("./services/context-engine/feedback");
@@ -196,7 +197,11 @@ app.listen(PORT, () => {
 
   // Build stakeholder health digests daily at 08:00
   cron.schedule("0 8 * * *", runDigestRunner);
-  console.log("  Digest runner scheduled (daily 08:00)\n");
+  console.log("  Digest runner scheduled (daily 08:00)");
+
+  // Roll product-usage events into health snapshots daily at 01:00
+  cron.schedule("0 1 * * *", runUsageTally);
+  console.log("  Usage tally scheduled (daily 01:00)\n");
 });
 
 module.exports = app;
