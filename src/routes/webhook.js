@@ -2,40 +2,7 @@ const express  = require("express");
 const crypto   = require("crypto");
 const supabase = require("../supabase");
 const { calcHealth } = require("../health");
-
-/**
- * Calculates a 0-100 product usage score from raw metrics.
- *
- * Priority:
- *   1. Seat adoption  (active_users / licensed_seats)  — weight 2
- *   2. Engagement     (dau / mau)                       — weight 2
- *   3. Feature breadth (features_used_count / total_features) — weight 1
- *   4. Direct score   (product_usage 0-100)             — fallback only
- *
- * Using a weighted average means partial data still produces a meaningful
- * score rather than silently falling back to the caller's number.
- */
-function calculateUsageScore(m) {
-  const scores = [];
-
-  if (m.active_users != null && m.licensed_seats > 0) {
-    scores.push({ score: Math.min(100, (m.active_users / m.licensed_seats) * 100), weight: 2 });
-  }
-  if (m.dau != null && m.mau > 0) {
-    scores.push({ score: Math.min(100, (m.dau / m.mau) * 100), weight: 2 });
-  }
-  if (m.features_used_count != null && m.total_features > 0) {
-    scores.push({ score: Math.min(100, (m.features_used_count / m.total_features) * 100), weight: 1 });
-  }
-
-  if (scores.length === 0) {
-    if (m.product_usage != null) return Math.min(100, Math.max(0, parseFloat(m.product_usage)));
-    return null;
-  }
-
-  const totalWeight = scores.reduce((a, b) => a + b.weight, 0);
-  return Math.round(scores.reduce((a, b) => a + b.score * b.weight, 0) / totalWeight);
-}
+const { calculateUsageScore } = require("../services/usage");
 
 async function matchAccount(userId, accountKey) {
   // Match order: domain → name (case-insensitive) → external_id
