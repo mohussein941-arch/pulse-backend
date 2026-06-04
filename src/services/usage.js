@@ -1,3 +1,5 @@
+const supabase = require("../supabase");
+
 function calculateUsageScore(m) {
   const scores = [];
 
@@ -42,4 +44,27 @@ function calculateUsageScore(m) {
   return Math.round(scores.reduce((a, b) => a + b.score * b.weight, 0) / totalWeight);
 }
 
-module.exports = { calculateUsageScore };
+async function computeUsageMetrics(account, asOf = new Date()) {
+  const { data, error } = await supabase.rpc("compute_usage_metrics", {
+    p_account_id: account.id,
+    p_org_id:     account.org_id,
+    p_as_of:      asOf.toISOString(),
+  });
+  if (error) throw error;
+  const r = (data && data[0]) || {};
+  const daysSince = r.last_active_at
+    ? Math.floor((asOf.getTime() - new Date(r.last_active_at).getTime()) / 86400000)
+    : null;
+  return {
+    dau: r.dau ?? 0, wau: r.wau ?? 0, mau: r.mau ?? 0, active_users: r.active_users ?? 0,
+    last_active_at: r.last_active_at ?? null, days_since_active: daysSince,
+    events_count: r.events_count ?? 0, events_count_prev: r.events_count_prev ?? 0,
+    features_used_count: r.features_used_count ?? 0, sessions_last_30d: r.sessions_last_30d ?? null,
+    key_events: r.key_events ?? null,
+    licensed_seats: account.licensed_seats ?? null,
+    total_features: account.licensed_features ?? null,
+    raw_payload: null,
+  };
+}
+
+module.exports = { calculateUsageScore, computeUsageMetrics };
