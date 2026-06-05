@@ -23,7 +23,7 @@ const HANDOVER_FIELDS = [
 router.get('/:token', async (req, res) => {
   const { data: plan } = await supabase
     .from('onboarding_plans')
-    .select('id, handover_data, handover_status, handover_sales_notes, handover_sales_email, account_id')
+    .select('id, handover_data, handover_fields, handover_status, handover_sales_notes, handover_sales_email, account_id')
     .eq('handover_token', req.params.token)
     .maybeSingle();
 
@@ -34,13 +34,17 @@ router.get('/:token', async (req, res) => {
     .from('accounts').select('name, industry, plan, arr').eq('id', plan.account_id).maybeSingle();
 
   const data = plan.handover_data || {};
-  const filled = HANDOVER_FIELDS.filter(([k]) => data[k]?.trim()).length;
-  const completeness = Math.round((filled / HANDOVER_FIELDS.length) * 100);
+  // Per-plan custom field set if present, else the canonical default.
+  const FIELDS = Array.isArray(plan.handover_fields) && plan.handover_fields.length
+    ? plan.handover_fields.filter(f => f && f.key).map(f => [f.key, f.label || f.key])
+    : HANDOVER_FIELDS;
+  const filled = FIELDS.filter(([k]) => data[k]?.trim()).length;
+  const completeness = FIELDS.length ? Math.round((filled / FIELDS.length) * 100) : 0;
 
   res.json({
     account: account ? { name: account.name, industry: account.industry, plan: account.plan, arr: account.arr } : null,
     handoverData:     data,
-    fields:           HANDOVER_FIELDS.map(([k, label]) => ({ key: k, label, value: data[k] || '' })),
+    fields:           FIELDS.map(([k, label]) => ({ key: k, label, value: data[k] || '' })),
     status:           plan.handover_status,
     salesNotes:       plan.handover_sales_notes || '',
     completeness,

@@ -115,7 +115,7 @@ router.post('/plan', async (req, res) => {
 });
 
 router.patch('/plan/:id', async (req, res) => {
-  const allowed = ['current_phase','phases','handover_data','go_live_target','go_live_actual','status'];
+  const allowed = ['current_phase','phases','handover_data','handover_fields','go_live_target','go_live_actual','status'];
   const updates = {};
   for (const k of allowed) {
     if (req.body[k] !== undefined) updates[k] = req.body[k];
