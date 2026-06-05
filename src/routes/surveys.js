@@ -21,33 +21,74 @@ const BASE_URL = () => process.env.FRONTEND_URL || "http://localhost:5174";
 // ── POST /api/surveys — create ────────────────────────────────────────────────
 router.post("/", async (req, res, next) => {
   try {
-    const { accountId, accountName, type, customQuestion, deadline } = req.body;
+    const { accountId, accountName, type, customQuestion, deadline, segment_config } = req.body;
 
-    if (!accountName || !type) {
-      return res.status(400).json({ error: "accountName and type are required" });
-    }
+    if (!type) return res.status(400).json({ error: "type is required" });
     if (!["NPS","CES","CSAT"].includes(type)) {
       return res.status(400).json({ error: "type must be NPS, CES, or CSAT" });
     }
 
-    const { data, error } = await supabase.from("surveys").insert({
-      // user_id renamed to created_by in Phase 2 (Step 8); keep user_id until then
+    // Resolve which accounts get a survey.
+    let toCreate;   // [{ id, name }]
+    let skipped = 0;
+
+    if (accountId) {
+      // Specific account — exactly as before, always created.
+      if (!accountName) return res.status(400).json({ error: "accountName is required for a specific account" });
+      toCreate = [{ id: accountId, name: accountName }];
+    } else {
+      // All accounts (empty segment_config) or a segment — fan out.
+      const { data: accts, error: aerr } = await supabase
+        .from("accounts")
+        .select("id, name, plan, stage, arr, archived")
+        .eq("org_id", req.orgId);
+      if (aerr) throw aerr;
+
+      const seg = segment_config || {};
+      const targets = (accts || [])
+        .filter(a => !a.archived)
+        .filter(a => {
+          if (seg.plan    && a.plan  !== seg.plan)       return false;
+          if (seg.stage   && a.stage !== seg.stage)      return false;
+          if (seg.arr_min && (a.arr ?? 0) < seg.arr_min) return false;
+          return true;
+        })
+        .map(a => ({ id: a.id, name: a.name }));
+
+      if (targets.length === 0) {
+        return res.status(400).json({ error: "No accounts match the selected scope" });
+      }
+
+      // Skip accounts that already have an active survey of this type (avoid mass duplicates).
+      const { data: existing } = await supabase
+        .from("surveys")
+        .select("account_id")
+        .eq("org_id", req.orgId).eq("type", type).eq("status", "active")
+        .in("account_id", targets.map(t => t.id));
+      const taken = new Set((existing || []).map(s => s.account_id));
+      toCreate = targets.filter(t => !taken.has(t.id));
+      skipped  = targets.length - toCreate.length;
+
+      if (toCreate.length === 0) {
+        return res.json({ created: 0, skipped, surveys: [] });
+      }
+    }
+
+    const rows = toCreate.map(t => ({
       user_id:         req.userId,
       org_id:          req.orgId,
-      account_id:      accountId || null,
-      account_name:    accountName,
+      account_id:      t.id,
+      account_name:    t.name,
       type,
       custom_question: customQuestion || null,
       deadline:        deadline || null,
       status:          "active",
-    }).select().single();
+    }));
 
+    const { data, error } = await supabase.from("surveys").insert(rows).select();
     if (error) throw error;
 
-    res.status(201).json({
-      survey: data,
-      link: `${BASE_URL()}/survey/${data.token}`,
-    });
+    res.json({ created: data.length, skipped, surveys: data });
   } catch (err) { next(err); }
 });
 
