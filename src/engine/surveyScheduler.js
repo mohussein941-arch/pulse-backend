@@ -138,7 +138,7 @@ async function runSurveyScheduler() {
     for (const [userId, userSchedules] of Object.entries(byUser)) {
       const { data: accounts } = await supabase
         .from('accounts')
-        .select('id, name, health_score, nps, plan, stage, arr, renewal_date, created_at')
+        .select('id, name, health_score, nps, plan, stage, arr, renewal_date, created_at, escalation_status')
         .eq('user_id', userId)
         .eq('archived', false);
 
@@ -159,6 +159,7 @@ async function runSurveyScheduler() {
             .limit(1);
 
           const lastSurveyDate = lastSurveys?.[0]?.created_at || null;
+          if (account.escalation_status === 'open') continue;   // paused — account is escalated
           if (!shouldFire(schedule, account, lastSurveyDate)) continue;
 
           // Get primary stakeholder

@@ -252,7 +252,7 @@ async function runAutomationEngine() {
       // Fetch all accounts for this org
       const { data: accounts } = await supabase
         .from('accounts')
-        .select('id, name, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, archived, created_at, active_playbook_id')
+        .select('id, name, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, archived, created_at, active_playbook_id, escalation_status')
         .eq('org_id', orgId)
         .eq('archived', false);
 
@@ -303,6 +303,7 @@ async function runAutomationEngine() {
 
         for (const account of targetAccounts) {
           if (await firedRecently(rule.id, account.id, cooldown)) continue;
+          if (account.escalation_status === 'open') continue;   // paused — account is escalated
           if (!triggered(rule, account, ctx)) continue;
 
           const detail = await executeAction(rule, account, ctx);

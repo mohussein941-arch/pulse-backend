@@ -267,6 +267,7 @@ async function runOutreachForUser(userId, accounts) {
 
   for (const account of accounts) {
     const signals = detectSignals(account);
+    if (account.escalation_status === 'open') continue;   // paused — account is escalated
     if (!signals.length) continue;
 
     // Fetch primary stakeholder for personalisation
@@ -385,7 +386,7 @@ async function runOutreachRunner() {
     for (const userId of userIds) {
       const { data: accounts } = await supabase
         .from('accounts')
-        .select('id, name, org_id, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, active_playbook_id, created_at')
+        .select('id, name, org_id, health_score, nps, ces, product_usage, open_tickets, churn_risk, arr, last_contact, renewal_date, stage, plan, active_playbook_id, created_at, escalation_status')
         .eq('user_id', userId)
         .eq('archived', false);
 

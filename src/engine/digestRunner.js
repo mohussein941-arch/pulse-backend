@@ -82,7 +82,7 @@ async function runDigestRunner() {
   try {
     const { data: schedules } = await supabase
       .from('digest_schedules')
-      .select('*, accounts(id, name, health_score, nps, ces, product_usage, open_tickets, arr, plan, stage)')
+      .select('*, accounts(id, name, health_score, nps, ces, product_usage, open_tickets, arr, plan, stage, escalation_status)')
       .eq('enabled', true);
 
     if (!schedules?.length) return;
@@ -101,6 +101,7 @@ async function runDigestRunner() {
         : Infinity;
       const requiredDays = schedule.frequency === 'quarterly' ? 85 : 28;
       if (daysSinceLast < requiredDays) continue;
+      if (account.escalation_status === 'open') continue;   // paused — account is escalated
 
       // Fetch milestones for success plan section
       const { data: milestones } = await supabase
