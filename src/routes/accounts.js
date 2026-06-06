@@ -14,6 +14,7 @@ const { generateHealthNarrative } = require("../engine/healthNarrative");
 const { recommendPlaybook } = require("../engine/playbookRecommender");
 const { generateCatchUp } = require("../engine/catchUp");
 const { generateHandoffPacket } = require("../engine/handoffPacket");
+const { generateEscalationBrief } = require("../engine/escalationBrief");
 
 const router = express.Router();
 
@@ -425,6 +426,24 @@ router.get("/:id/handoff", async (req, res, next) => {
     const result = await generateHandoffPacket({ orgId: req.orgId, accountId: req.params.id, userId: req.userId, db: supabase });
     if (!result) return res.status(404).json({ error: "Account not found" });
     res.json(result);
+  } catch (err) { next(err); }
+});
+
+router.post("/:id/escalation-summary", async (req, res, next) => {
+  try {
+    const result = await generateEscalationBrief({ orgId: req.orgId, accountId: req.params.id, userId: req.userId, db: supabase });
+    if (!result) return res.status(404).json({ error: "Account not found" });
+    await supabase.from("accounts").update({ escalation_summary: result }).eq("id", req.params.id).eq("org_id", req.orgId);
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+router.get("/:id/escalation-summary", async (req, res, next) => {
+  try {
+    const { data, error } = await supabase
+      .from("accounts").select("escalation_summary").eq("id", req.params.id).eq("org_id", req.orgId).maybeSingle();
+    if (error) throw error;
+    res.json(data?.escalation_summary || null);
   } catch (err) { next(err); }
 });
 
