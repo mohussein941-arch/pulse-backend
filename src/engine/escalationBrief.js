@@ -51,6 +51,22 @@ function buildEscalationPrompt({ account, recentMeetings, openTasks, stakeholder
     ? stakeholders.map(s => `- ${s.name}${s.title ? `, ${s.title}` : ''}${s.sentiment ? ` — sentiment: ${s.sentiment}` : ''}`).join('\n')
     : 'No stakeholders on record.';
 
+  const now = new Date();
+  const renewalText = (() => {
+    if (!account.renewal_date) return 'none on record';
+    const days = Math.ceil((new Date(account.renewal_date) - now) / 86400000);
+    if (Number.isNaN(days)) return account.renewal_date;
+    if (days < 0) return `${account.renewal_date} — OVERDUE by ${Math.abs(days)} days`;
+    const months = Math.round(days / 30.44);
+    return `${account.renewal_date} — about ${months} month${months === 1 ? '' : 's'} (${days} days) away`;
+  })();
+  const escalationText = (() => {
+    if (!account.escalation_since) return 'unknown';
+    const days = Math.floor((now - new Date(account.escalation_since)) / 86400000);
+    if (Number.isNaN(days) || days < 0) return account.escalation_since;
+    return `${account.escalation_since} (escalated ${days} day${days === 1 ? '' : 's'} ago)`;
+  })();
+
   return `You are helping a Customer Success Manager frame an escalated account so a cross-functional team (Product, Tech Support, CS leadership) can rally around it quickly.
 
 Write in plain, direct, factual language. No marketing tone, no filler, no hype. Ground every statement in the data below — do not invent facts.
@@ -64,12 +80,12 @@ Churn risk: ${account.churn_risk ?? 'unknown'}
 NPS: ${account.nps ?? 'none'}
 CES: ${account.ces ?? 'none'}
 Open tickets: ${account.open_tickets ?? 0}
-Renewal: ${account.renewal_date ?? 'none on record'}
+Renewal: ${renewalText}
 
 ## Why it's escalated
 Reason: ${account.escalation_reason || 'not specified'}
 CSM notes: ${account.escalation_notes || 'none'}
-Escalated since: ${account.escalation_since || 'unknown'}
+Escalated since: ${escalationText}
 
 ## Recent meetings
 ${meetingsText}
@@ -87,7 +103,8 @@ Reply with RAW JSON only — no markdown, no code fences, no preamble. Schema:
   "challenges": ["specific blocker or risk drawn from the data", "..."],
   "recommended_actions": [{"team": "Product | Tech Support | CS | Sales", "action": "concrete next step that team should own"}]
 }
-Keep challenges to the 3-5 most important. Keep recommended_actions concrete and assigned to the team best placed to act.`;
+Keep challenges to the 3-5 most important. Keep recommended_actions concrete and assigned to the team best placed to act.
+Do NOT compute or estimate any dates or time spans yourself. Use the renewal distance and time-since-escalation exactly as provided in the data above; never restate them as a different number of days, weeks, or months.`;
 }
 
 async function generateEscalationBrief({ orgId, accountId, userId, db = defaultSupabase }) {
