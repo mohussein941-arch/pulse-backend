@@ -109,6 +109,9 @@ router.post("/run", async (req, res, next) => {
 
     for (const record of records) {
       try {
+        const hasTickets = Array.isArray(record.tickets);
+        const openCount  = hasTickets ? record.tickets.length : (record.openTickets || 0);
+
         const { data: existing } = await supabase
           .from("accounts").select("id, open_tickets, last_contact")
           .eq("org_id", req.orgId)
@@ -119,18 +122,17 @@ router.post("/run", async (req, res, next) => {
         const { healthScore, churnRisk, stage } = calcHealth({
           nps: record.nps || 50, ces: record.ces || 3.5,
           productUsage: record.productUsage || 60,
-          openTickets:  record.openTickets  || 0,
+          openTickets:  openCount,
         });
 
         const row = {
-          // user_id renamed to created_by in Phase 2 (Step 8); keep user_id until then
           user_id:      req.userId,
           org_id:       req.orgId,
           name:         record.name,
           industry:     record.industry || "",
           arr:          record.arr || 0,
           renewal_date: record.renewalDate || null,
-          open_tickets: record.openTickets || 0,
+          open_tickets: openCount,
           last_contact: record.lastContact || new Date().toISOString().split("T")[0],
           notes:        record.notes || null,
           health_score: healthScore,
@@ -143,17 +145,54 @@ router.post("/run", async (req, res, next) => {
         let accountId = null; let changed = null;
 
         if (existing) {
-          if (existing.open_tickets !== record.openTickets
+          accountId = existing.id;
+          if (existing.open_tickets !== openCount
             || existing.last_contact !== record.lastContact) {
             await supabase.from("accounts").update(row)
               .eq("id", existing.id).eq("org_id", req.orgId);
-            accountId = existing.id; changed = 'updated'; updated++;
+            changed = 'updated'; updated++;
           } else {
             changed = 'skipped'; skipped++;
           }
         } else {
           const { data: inserted } = await supabase.from("accounts").insert(row).select("id").single();
           accountId = inserted?.id; changed = 'created'; created++;
+        }
+
+        // ── Persist individual tickets (only connectors that emit record.tickets) ──
+        if (hasTickets && accountId) {
+          const nowTs = new Date().toISOString();
+          const tixRows = record.tickets.map(t => ({
+            org_id:            req.orgId,
+            account_id:        accountId,
+            source:            record.source,
+            external_id:       String(t.externalId),
+            subject:           t.subject   || null,
+            status:            t.status    || null,
+            priority:          t.priority  || null,
+            is_open:           true,
+            opened_at:         t.openedAt  || null,
+            ticket_updated_at: t.updatedAt || null,
+            resolved_at:       null,
+            url:               t.url       || null,
+            synced_at:         nowTs,
+          }));
+          if (tixRows.length) {
+            const { error: upErr } = await supabase
+              .from("tickets").upsert(tixRows, { onConflict: "org_id,source,external_id" });
+            if (upErr) errors.push(`tickets "${record.name}": ${upErr.message}`);
+          }
+          const fetchedIds = tixRows.map(r => r.external_id);
+          const { data: openExisting } = await supabase
+            .from("tickets").select("id, external_id")
+            .eq("org_id", req.orgId).eq("account_id", accountId)
+            .eq("source", record.source).eq("is_open", true);
+          const stale = (openExisting || [])
+            .filter(r => !fetchedIds.includes(r.external_id)).map(r => r.id);
+          if (stale.length) {
+            await supabase.from("tickets")
+              .update({ is_open: false, resolved_at: nowTs }).in("id", stale);
+          }
         }
 
         if (accountId && (changed === 'created' || changed === 'updated')) {
@@ -164,13 +203,13 @@ router.post("/run", async (req, res, next) => {
               accountId,
               source:    'crm_event',
               direction: 'internal',
-              content:   `CRM ${changed === 'created' ? 'new account' : 'update'} (${record.source}): ${record.name} — ARR ${record.arr || 0}, ${record.openTickets || 0} open tickets${renewalNote}`,
+              content:   `CRM ${changed === 'created' ? 'new account' : 'update'} (${record.source}): ${record.name} — ARR ${record.arr || 0}, ${openCount} open tickets${renewalNote}`,
               metadata: {
                 connector_id:       connectorId,
                 provider_source:    record.source,
                 provider_object_id: record.externalId,
                 arr:                record.arr || 0,
-                open_tickets:       record.openTickets || 0,
+                open_tickets:       openCount,
                 renewal_date:       record.renewalDate || null,
                 last_contact:       record.lastContact || null,
                 change:             changed,
