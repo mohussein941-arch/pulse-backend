@@ -424,46 +424,83 @@ const fetchServiceNow = async ({ instanceUrl, username, password }, fieldMap) =>
 
 // ─── HubSpot Service Hub ──────────────────────────────────────────────────────
 const fetchHubSpotService = async ({ apiKey, portalId }, fieldMap) => {
-  const base = hubspotBase(apiKey);
-  // Group open tickets by company association
-  const res = await axios.get(
-    `${base}/crm/v3/objects/tickets?properties=hs_pipeline_stage,subject,hs_ticket_priority&associations=company&limit=100&filters=hs_pipeline_stage:neq:4`,
-    { headers: { Authorization: `Bearer ${apiKey}` } }
-  );
+  const base     = hubspotBase(apiKey);
+  const headers  = { Authorization: `Bearer ${apiKey}` };
+  const PRIORITY = { LOW: "low", MEDIUM: "normal", HIGH: "high", URGENT: "urgent" };
 
-  // Aggregate by company
+  // Closed-stage IDs, read from the ticket pipelines (handles custom pipelines).
+  const closedStages = new Set();
+  try {
+    const pRes = await axios.get(`${base}/crm/v3/pipelines/tickets`, { headers });
+    for (const pl of (pRes.data?.results || [])) {
+      for (const st of (pl.stages || [])) {
+        if (st.metadata?.isClosed === "true" || st.metadata?.isClosed === true) closedStages.add(st.id);
+      }
+    }
+  } catch {}
+
+  // Fetch tickets (with company associations), paginate via cursor.
+  const props = "subject,hs_ticket_priority,hs_pipeline_stage,createdate,hs_lastmodifieddate";
+  const allTickets = [];
+  let after = null, pages = 0;
+  do {
+    const url = `${base}/crm/v3/objects/tickets?properties=${props}&associations=company&limit=100`
+      + (after ? `&after=${after}` : "");
+    const res  = await axios.get(url, { headers });
+    const data = res.data || {};
+    allTickets.push(...(data.results || []));
+    after = data.paging?.next?.after || null;
+    pages++;
+  } while (after && pages < 20);
+
+  // Keep open tickets (not in a closed stage), grouped by associated company.
   const byCompany = {};
-  ((res.data || {}).results || []).forEach(ticket => {
-    const companyId = ticket.associations?.companies?.results?.[0]?.id || "unknown";
-    if (!byCompany[companyId]) byCompany[companyId] = { count: 0, lastUpdated: null };
-    byCompany[companyId].count++;
-    byCompany[companyId].lastUpdated = ticket.updatedAt;
-  });
+  for (const t of allTickets) {
+    const stage = t.properties?.hs_pipeline_stage;
+    const isClosed = closedStages.size ? closedStages.has(stage) : stage === "4";
+    if (isClosed) continue;
+    const companyId = t.associations?.companies?.results?.[0]?.id;
+    if (!companyId) continue;
+    (byCompany[companyId] = byCompany[companyId] || []).push({
+      externalId: String(t.id),
+      subject:    t.properties?.subject || "(no subject)",
+      status:     stage ? `stage_${stage}` : null,
+      priority:   PRIORITY[(t.properties?.hs_ticket_priority || "").toUpperCase()] || "normal",
+      openedAt:   t.properties?.createdate || t.createdAt || null,
+      updatedAt:  t.properties?.hs_lastmodifieddate || t.updatedAt || null,
+      url:        portalId ? `https://app.hubspot.com/contacts/${portalId}/ticket/${t.id}` : null,
+    });
+  }
 
-  // Fetch company names for matched IDs
-  const companyIds = Object.keys(byCompany).filter(id => id !== "unknown");
-  const companies  = [];
-
-  for (const id of companyIds.slice(0, 50)) {
+  // Resolve company names via batch read (chunks of 100 — no 50-company cap).
+  const companyIds = Object.keys(byCompany);
+  const nameById   = {};
+  for (let i = 0; i < companyIds.length; i += 100) {
     try {
-      const c = await axios.get(
-        `${base}/crm/v3/objects/companies/${id}?properties=name`,
-        { headers: { Authorization: `Bearer ${apiKey}` } }
+      const res = await axios.post(
+        `${base}/crm/v3/objects/companies/batch/read`,
+        { properties: ["name"], inputs: companyIds.slice(i, i + 100).map(id => ({ id })) },
+        { headers }
       );
-      companies.push({
-        externalId:  id,
-        source:      "hubspot_service",
-        name:        c.data.properties?.name || "Unknown",
-        industry:    "",
-        arr:         0,
-        renewalDate: null,
-        openTickets: byCompany[id].count,
-        lastContact: toDate(byCompany[id].lastUpdated) || new Date().toISOString().split("T")[0],
-      });
+      for (const c of (res.data?.results || [])) nameById[c.id] = c.properties?.name || "Unknown";
     } catch {}
   }
 
-  return companies;
+  return companyIds.map(id => {
+    const tickets = byCompany[id];
+    const latest  = tickets.reduce((m, t) => (t.updatedAt && (!m || t.updatedAt > m) ? t.updatedAt : m), null);
+    return {
+      externalId:  id,
+      source:      "hubspot_service",
+      name:        nameById[id] || "Unknown",
+      industry:    "",
+      arr:         0,
+      renewalDate: null,
+      openTickets: tickets.length,
+      tickets,
+      lastContact: toDate(latest) || new Date().toISOString().split("T")[0],
+    };
+  });
 };
 
 // ─── Help Scout ───────────────────────────────────────────────────────────────
