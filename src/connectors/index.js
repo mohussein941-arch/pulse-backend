@@ -284,22 +284,50 @@ const fetchDynamics = async ({ accessToken, instanceUrl }, fieldMap) => {
 
 // ─── Zendesk ──────────────────────────────────────────────────────────────────
 const fetchZendesk = async ({ subdomain, email, apiToken }, fieldMap) => {
-  const auth  = Buffer.from(`${email}/token:${apiToken}`).toString("base64");
-  const orgs  = await axios.get(
-    `https://${subdomain}.zendesk.com/api/v2/organizations.json?per_page=100`,
-    { headers: { Authorization: `Basic ${auth}` } }
+  const auth    = Buffer.from(`${email}/token:${apiToken}`).toString("base64");
+  const headers = { Authorization: `Basic ${auth}` };
+  const baseUrl = `https://${subdomain}.zendesk.com`;
+
+  // Follow Zendesk offset pagination via next_page (capped for safety).
+  const fetchAllPages = async (startUrl, key, maxPages = 20) => {
+    const out = [];
+    let url = startUrl, pages = 0;
+    while (url && pages < maxPages) {
+      const res  = await axios.get(url, { headers });
+      const data = res.data || {};
+      out.push(...(data[key] || []));
+      url = data.next_page || null;
+      pages++;
+    }
+    return out;
+  };
+
+  const orgs = await fetchAllPages(
+    `${baseUrl}/api/v2/organizations.json?per_page=100`,
+    "organizations"
   );
 
+  const UNRESOLVED = new Set(["new", "open", "pending", "hold"]);
+
   return await Promise.all(
-    ((orgs.data || {}).organizations || []).map(async org => {
-      // Get open ticket count for this organisation
-      let openCount = 0;
+    orgs.map(async org => {
+      let tickets = [];
       try {
-        const tickets = await axios.get(
-          `https://${subdomain}.zendesk.com/api/v2/organizations/${org.id}/tickets.json?status=open`,
-          { headers: { Authorization: `Basic ${auth}` } }
+        const all = await fetchAllPages(
+          `${baseUrl}/api/v2/organizations/${org.id}/tickets.json?per_page=100`,
+          "tickets"
         );
-        openCount = tickets.data.count || 0;
+        tickets = all
+          .filter(t => UNRESOLVED.has(t.status))
+          .map(t => ({
+            externalId: String(t.id),
+            subject:    t.subject || t.raw_subject || "(no subject)",
+            status:     t.status || null,
+            priority:   t.priority || "normal",
+            openedAt:   t.created_at || null,
+            updatedAt:  t.updated_at || null,
+            url:        `${baseUrl}/agent/tickets/${t.id}`,
+          }));
       } catch {}
 
       return {
@@ -309,7 +337,8 @@ const fetchZendesk = async ({ subdomain, email, apiToken }, fieldMap) => {
         industry:    "",
         arr:         0,
         renewalDate: null,
-        openTickets: openCount,
+        openTickets: tickets.length,
+        tickets,
         lastContact: toDate(org.updated_at) || new Date().toISOString().split("T")[0],
         notes:       org.notes || "",
       };
