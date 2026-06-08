@@ -635,19 +635,40 @@ const fetchFreshdesk = async ({ domain, apiKey }, fieldMap) => {
   const headers = { Authorization: `Basic ${auth}`, "Content-Type": "application/json" };
   const base    = `https://${domain}.freshdesk.com/api/v2`;
 
-  // Fetch all companies
-  const companiesRes = await axios.get(`${base}/companies?page=1&per_page=100`, { headers });
-  const companies    = companiesRes.data || [];
+  // Freshdesk status: 2=Open, 3=Pending, 4=Resolved, 5=Closed.  priority: 1=low..4=urgent.
+  const STATUS   = { 2: "open", 3: "pending", 4: "resolved", 5: "closed" };
+  const PRIORITY = { 1: "low", 2: "normal", 3: "high", 4: "urgent" };
+
+  // Paginate companies (page-based, per_page max 100; stop on a short page).
+  const companies = [];
+  for (let page = 1; page <= 20; page++) {
+    const res   = await axios.get(`${base}/companies?page=${page}&per_page=100`, { headers });
+    const batch = Array.isArray(res.data) ? res.data : [];
+    companies.push(...batch);
+    if (batch.length < 100) break;
+  }
 
   return await Promise.all(companies.map(async company => {
-    let openTickets = 0;
+    let tickets = [];
     try {
-      // status=2 → Open in Freshdesk
-      const tRes = await axios.get(
-        `${base}/tickets?company_id=${company.id}&status=2&per_page=100`,
-        { headers }
-      );
-      openTickets = Array.isArray(tRes.data) ? tRes.data.length : 0;
+      // Filter Tickets search API supports company_id + status (open or pending = unresolved).
+      const query = encodeURIComponent(`"company_id:${company.id} AND (status:2 OR status:3)"`);
+      const all   = [];
+      for (let page = 1; page <= 10; page++) {
+        const tRes  = await axios.get(`${base}/search/tickets?query=${query}&page=${page}`, { headers });
+        const batch = (tRes.data && tRes.data.results) || [];
+        all.push(...batch);
+        if (batch.length < 30) break;
+      }
+      tickets = all.map(t => ({
+        externalId: String(t.id),
+        subject:    t.subject || "(no subject)",
+        status:     STATUS[t.status] || String(t.status),
+        priority:   PRIORITY[t.priority] || "normal",
+        openedAt:   t.created_at || null,
+        updatedAt:  t.updated_at || null,
+        url:        `https://${domain}.freshdesk.com/a/tickets/${t.id}`,
+      }));
     } catch {}
 
     return {
@@ -657,7 +678,8 @@ const fetchFreshdesk = async ({ domain, apiKey }, fieldMap) => {
       industry:    "",
       arr:         0,
       renewalDate: null,
-      openTickets,
+      openTickets: tickets.length,
+      tickets,
       lastContact: toDate(company.updated_at) || new Date().toISOString().split("T")[0],
       notes:       company.description || "",
     };
