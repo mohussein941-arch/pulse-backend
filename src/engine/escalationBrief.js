@@ -1,5 +1,6 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const defaultSupabase = require('../supabase');
+const { getAccountTickets } = require('../services/tickets');
 
 const ESCALATION_MODEL = 'claude-sonnet-4-6';
 const COST_INPUT_PER_TOKEN = 3 / 1_000_000;
@@ -38,7 +39,7 @@ async function writeTrace({ orgId, accountId, userId, inputTokens, outputTokens,
   } catch (e) { /* best-effort trace */ }
 }
 
-function buildEscalationPrompt({ account, recentMeetings, openTasks, stakeholders }) {
+function buildEscalationPrompt({ account, recentMeetings, openTasks, stakeholders, tickets }) {
   const meetingsText = recentMeetings.length
     ? recentMeetings.map((m, i) =>
         `Meeting ${i + 1} — ${m.title || 'Untitled'} (${m.date || 'no date'})\nSummary: ${m.summary || 'none'}\nAction items: ${m.action_items || 'none'}`
@@ -50,6 +51,25 @@ function buildEscalationPrompt({ account, recentMeetings, openTasks, stakeholder
   const stakeText = stakeholders.length
     ? stakeholders.map(s => `- ${s.name}${s.title ? `, ${s.title}` : ''}${s.sentiment ? ` — sentiment: ${s.sentiment}` : ''}`).join('\n')
     : 'No stakeholders on record.';
+
+  // Support tickets — prefer the synced individual-ticket detail; fall back to
+  // the bare account.open_tickets count for connectors that don't emit tickets.
+  const ticketsText = (() => {
+    const counts = tickets?.counts || { open: 0, critical: 0, ageing: 0 };
+    if (counts.open > 0) {
+      const header = `Open tickets: ${counts.open} (critical: ${counts.critical}, ageing >7d: ${counts.ageing})`;
+      const list = (tickets.critical || []).slice(0, 8).map(t =>
+        `- [${t.priority}] ${t.subject}${t.ageDays != null ? ` (open ${t.ageDays} day${t.ageDays === 1 ? '' : 's'})` : ''}`
+      );
+      return list.length
+        ? `${header}\nMost critical open tickets:\n${list.join('\n')}`
+        : `${header}\nNo high/urgent tickets among the open set.`;
+    }
+    if ((account.open_tickets ?? 0) > 0) {
+      return `Open tickets: ${account.open_tickets} (individual ticket detail not synced for this connector).`;
+    }
+    return 'No open support tickets on record.';
+  })();
 
   const now = new Date();
   const renewalText = (() => {
@@ -95,6 +115,9 @@ ${tasksText}
 
 ## Stakeholders
 ${stakeText}
+
+## Support tickets
+${ticketsText}
 
 ## Your output
 Reply with RAW JSON only — no markdown, no code fences, no preamble. Schema:
@@ -142,10 +165,17 @@ async function generateEscalationBrief({ orgId, accountId, userId, db = defaultS
     date: m.meeting_date, title: m.title, summary: m.summary, action_items: m.action_items,
   }));
 
+  let tickets = { open: [], critical: [], ageing: [], counts: { open: 0, critical: 0, ageing: 0 } };
+  try {
+    tickets = await getAccountTickets({ orgId, accountId, db });
+  } catch (e) {
+    console.error('[escalationBrief] ticket fetch failed:', e.message);
+  }
+
   let ai = null;
   let traceInfo = null;
   try {
-    const prompt = buildEscalationPrompt({ account, recentMeetings, openTasks: openTasks || [], stakeholders: stakeholders || [] });
+    const prompt = buildEscalationPrompt({ account, recentMeetings, openTasks: openTasks || [], stakeholders: stakeholders || [], tickets });
     const result = await callClaude(prompt);
     traceInfo = { inputTokens: result.inputTokens, outputTokens: result.outputTokens, latencyMs: result.latencyMs };
     const parsed = JSON.parse(result.rawText);
@@ -181,6 +211,10 @@ async function generateEscalationBrief({ orgId, accountId, userId, db = defaultS
     recent_meetings: recentMeetings,
     open_tasks: openTasks || [],
     stakeholders: stakeholders || [],
+    tickets: {
+      counts: tickets.counts,
+      critical: tickets.critical.slice(0, 10),
+    },
     ai,
     generated_at: new Date().toISOString(),
     generated_by: userId,

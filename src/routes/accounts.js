@@ -15,6 +15,7 @@ const { recommendPlaybook } = require("../engine/playbookRecommender");
 const { generateCatchUp } = require("../engine/catchUp");
 const { generateHandoffPacket } = require("../engine/handoffPacket");
 const { generateEscalationBrief } = require("../engine/escalationBrief");
+const { getAccountTickets } = require("../services/tickets");
 
 const router = express.Router();
 
@@ -444,6 +445,20 @@ router.get("/:id/escalation-summary", async (req, res, next) => {
       .from("accounts").select("escalation_summary").eq("id", req.params.id).eq("org_id", req.orgId).maybeSingle();
     if (error) throw error;
     res.json(data?.escalation_summary || null);
+  } catch (err) { next(err); }
+});
+
+// ── GET /api/accounts/:id/tickets ────────────────────────────────────────────
+// Open tickets for an account (priority/status/age/url) + open/critical/ageing
+// counts. Only connectors that emit individual tickets populate this; others
+// return an empty list (the account's open_tickets count still reflects them).
+router.get("/:id/tickets", async (req, res, next) => {
+  try {
+    const { data: acct } = await supabase
+      .from("accounts").select("id, open_tickets").eq("id", req.params.id).eq("org_id", req.orgId).maybeSingle();
+    if (!acct) return res.status(404).json({ error: "Account not found" });
+    const result = await getAccountTickets({ orgId: req.orgId, accountId: req.params.id, db: supabase });
+    res.json({ ...result, account_open_tickets: acct.open_tickets ?? 0 });
   } catch (err) { next(err); }
 });
 
