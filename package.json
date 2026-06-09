@@ -21,7 +21,9 @@
     "googleapis": "^171.4.0",
     "helmet": "^8.1.0",
     "js-tiktoken": "^1.0.21",
+    "multer": "^2.1.1",
     "node-cron": "^4.2.1",
+    "officeparser": "^7.2.1",
     "openai": "^6.37.0",
     "zod": "^4.4.3"
   },

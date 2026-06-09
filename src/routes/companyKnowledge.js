@@ -1,9 +1,14 @@
-﻿const express = require('express');
+const express = require('express');
+const multer = require('multer');
+const officeParser = require('officeparser');
 const supabase = require('../supabase');
 const { researchCompany } = require('../engine/companyResearch');
 
 const router = express.Router();
 const CORPUS_CHAR_CAP = 12000;
+const DOC_CHAR_CAP = 50000;
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 10 } });
 
 async function loadKnowledge(orgId) {
   const { data: profile } = await supabase.from('company_profile').select('*').eq('org_id', orgId).maybeSingle();
@@ -147,6 +152,58 @@ router.get('/documents', async (req, res, next) => {
       .from('knowledge_documents').select('id,kind,title,source,created_at')
       .eq('org_id', req.orgId).order('created_at', { ascending: false });
     res.json({ documents: data || [] });
+  } catch (err) { next(err); }
+});
+
+// POST /api/company-knowledge/documents — upload + extract text into the corpus
+router.post('/documents', upload.array('files', 10), async (req, res, next) => {
+  try {
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'No files uploaded' });
+
+    const inserted = [];
+    const failed = [];
+    for (const f of files) {
+      let text = '';
+      try {
+        const ext = f.originalname.split('.').pop().toLowerCase();
+        const ast = await officeParser.parseOffice(f.buffer, { fileType: ext });
+        text = ast.toText();
+      } catch (e) {
+        failed.push({ name: f.originalname, reason: 'Could not read file' });
+        continue;
+      }
+      text = (text || '').trim();
+      if (!text) { failed.push({ name: f.originalname, reason: 'No text found' }); continue; }
+      if (text.length > DOC_CHAR_CAP) text = text.slice(0, DOC_CHAR_CAP);
+
+      const { data, error } = await supabase.from('knowledge_documents').insert({
+        org_id: req.orgId,
+        kind: 'document',
+        title: f.originalname,
+        source: f.originalname,
+        content_text: text,
+      }).select('id,kind,title,source,created_at').maybeSingle();
+
+      if (error) { failed.push({ name: f.originalname, reason: 'Save failed' }); continue; }
+      inserted.push(data);
+    }
+
+    const { data: documents } = await supabase
+      .from('knowledge_documents').select('id,kind,title,source,created_at')
+      .eq('org_id', req.orgId).order('created_at', { ascending: false });
+
+    res.json({ documents: documents || [], inserted, failed });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/company-knowledge/documents/:id
+router.delete('/documents/:id', async (req, res, next) => {
+  try {
+    const { error } = await supabase.from('knowledge_documents')
+      .delete().eq('org_id', req.orgId).eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
   } catch (err) { next(err); }
 });
 
