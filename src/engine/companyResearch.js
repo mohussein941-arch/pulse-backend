@@ -22,11 +22,14 @@ Rules:
 - Output ONLY the final JSON object as your last message — no surrounding prose, no code fences.`;
 }
 
-function buildUser({ productName, websiteUrl }) {
+function buildUser({ productName, websiteUrl, priorKnowledge }) {
+  const prior = (priorKnowledge && priorKnowledge.trim())
+    ? `\n\nEXISTING KNOWLEDGE already gathered about this product (incorporate it and build on it; do not contradict it unless web evidence clearly shows it changed; preserve the feature names listed here and add any new ones you find):\n${priorKnowledge.trim()}\n`
+    : '';
   return `Research this product and its market, then return the JSON.
 
 Product name: ${productName}
-Website: ${websiteUrl}
+Website: ${websiteUrl}${prior}
 
 Return EXACTLY this shape:
 {
@@ -57,14 +60,14 @@ function extractJson(text) {
   return JSON.parse(text.slice(first, last + 1));
 }
 
-async function researchCompany({ orgId, productName, websiteUrl, userId }) {
+async function researchCompany({ orgId, productName, websiteUrl, userId, priorKnowledge }) {
   const t0 = Date.now();
   const response = await getAnthropic().messages.create({
     model: RESEARCH_MODEL,
     max_tokens: 8000,
     tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
     system: buildSystem(),
-    messages: [{ role: 'user', content: buildUser({ productName, websiteUrl }) }],
+    messages: [{ role: 'user', content: buildUser({ productName, websiteUrl, priorKnowledge }) }],
   });
 
   const parsed = extractJson(extractText(response.content));
