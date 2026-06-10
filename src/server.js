@@ -51,6 +51,7 @@ const outreachRouter               = require("./routes/outreach");
 const schedulesRouter              = require("./routes/schedules");
 const performanceRouter            = require("./routes/performance");
 const companyKnowledgeRouter       = require("./routes/companyKnowledge");
+const opportunitiesRouter          = require("./routes/opportunities");
 const { runAutomationEngine }  = require("./engine/automationRunner");
 const { runBriefingEngine }    = require("./engine/briefingRunner");
 const { runGmailSync }         = require("./engine/gmailIngestion");
@@ -129,6 +130,7 @@ app.use("/webhook",      webhookPublicRouter); // product usage webhook — publ
 app.use("/api", requireUser);
 app.use("/api/accounts",          accountsRouter);
 app.use("/api/company-knowledge", companyKnowledgeRouter);
+app.use("/api/opportunities",    opportunitiesRouter);
 app.use("/api/sync",       syncRouter);
 app.use("/api/surveys",    surveysRouter);
 app.use("/api/automation",  automationRouter);
