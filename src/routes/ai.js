@@ -1,5 +1,6 @@
-// routes/ai.js — BYOK AI config + pre-call brief + account Q&A + briefing summary
+// routes/ai.js — AI config CRUD (BYOK settings UI) + native pre-call brief + account Q&A + briefing summary
 // M0b: account reads scoped to req.orgId; profile reads stay per-user (Tier C)
+// M4c.2: brief/chat/briefing-summary now use server-side llm.reason(); config/test routes retain BYOK path for Settings UI
 
 const express  = require('express');
 const router   = express.Router();
@@ -9,6 +10,7 @@ const { callAI, testKey, MODELS } = require('../utils/ai');
 const { schemas, validate } = require('../utils/validate');
 const { audit } = require('../middleware/audit');
 const { buildAccountContext } = require('../engine/accountContext');
+const llm = require('../services/llm');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 async function getUserAiConfig(userId) {
@@ -118,9 +120,6 @@ router.post('/test', async (req, res, next) => {
 // POST /api/ai/brief/:accountId
 router.post('/brief/:accountId', async (req, res, next) => {
   try {
-    const config = await getUserAiConfig(req.userId);
-    if (!requireAiConfig(config, res)) return;
-
     // Load account + related data — scoped to org (accounts is Tier B)
     const { data: account, error } = await supabase
       .from('accounts')
@@ -181,7 +180,11 @@ router.post('/brief/:accountId', async (req, res, next) => {
       `Notes:\n${account.notes || 'None'}`,
     ].join('\n');
 
-    const brief = await callAI(config, {
+    const { output: brief } = await llm.reason({
+      orgId:     req.orgId,
+      feature:   'ask_ai_brief',
+      accountId: req.params.accountId,
+      createdBy: req.userId,
       system: 'You are an expert Customer Success Manager assistant. Generate precise, actionable pre-call briefs. Reference specific numbers and facts. Be concise — no padding or generic advice.',
       user: `Generate a pre-call brief for this account:\n\n${safeBlock('account_data', accountBlock)}\n\nFormat your response exactly as:\n\n**Snapshot**\n[2 sentences — account health and relationship status]\n\n**Watch Points**\n- [specific concern with data reference]\n\n**Wins to Acknowledge**\n- [positive signal]\n\n**Talking Points**\n- [specific agenda item]\n\n**Recommended Action**\n[One clear action to take on this call]`,
       maxTokens: 600,
@@ -198,9 +201,6 @@ router.post('/brief/:accountId', async (req, res, next) => {
 // Body: { question: string, history?: [{ role, content }] }
 router.post('/chat/:accountId', async (req, res, next) => {
   try {
-    const config = await getUserAiConfig(req.userId);
-    if (!requireAiConfig(config, res)) return;
-
     const { question, history = [] } = req.body;
     if (!question?.trim()) return res.status(400).json({ error: 'question is required' });
     if (question.length > 500) return res.status(400).json({ error: 'question too long (max 500 chars)' });
@@ -228,7 +228,11 @@ router.post('/chat/:accountId', async (req, res, next) => {
       { role: 'user', content: safeBlock('question', question) },
     ];
 
-    const answer = await callAI(config, {
+    const { output: answer } = await llm.reason({
+      orgId:     req.orgId,
+      feature:   'ask_ai_chat',
+      accountId: req.params.accountId,
+      createdBy: req.userId,
       system: `You are a Customer Success assistant. Answer questions about the following account based only on the data provided. If the data doesn't support a definitive answer, say so explicitly. All dates in the data are pre-computed with relative ages — no date arithmetic is needed.\n\n${safeBlock('account_data', context.text)}`,
       user: messages.map(m => `${m.role === 'assistant' ? 'Assistant' : 'CSM'}: ${m.content}`).join('\n\n'),
       maxTokens: 500,
@@ -245,9 +249,6 @@ router.post('/chat/:accountId', async (req, res, next) => {
 // Body: { items: briefing items array }
 router.post('/briefing-summary', async (req, res, next) => {
   try {
-    const config = await getUserAiConfig(req.userId);
-    if (!requireAiConfig(config, res)) return;
-
     const { items = [] } = req.body;
     if (!Array.isArray(items) || items.length === 0) {
       return res.json({ summary: null });
@@ -269,7 +270,10 @@ router.post('/briefing-summary', async (req, res, next) => {
       ...wins.slice(0, 3).map(i => `• WIN: ${i.signalDetail}`),
     ].join('\n');
 
-    const summary = await callAI(config, {
+    const { output: summary } = await llm.reason({
+      orgId:     req.orgId,
+      feature:   'briefing_summary',
+      createdBy: req.userId,
       system: 'You are a Customer Success expert. Write a brief, direct portfolio narrative for a CSM starting their day. Second person only ("You have...", "Your top priority..."). No bullet points — 2-3 flowing sentences maximum.',
       user: `Based on today\'s briefing items, write a 2-3 sentence narrative:\n\n${safeBlock('briefing_items', itemLines)}`,
       maxTokens: 150,
