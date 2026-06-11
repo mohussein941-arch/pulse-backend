@@ -8,6 +8,7 @@ const { encrypt, decrypt, mask } = require('../utils/crypto');
 const { callAI, testKey, MODELS } = require('../utils/ai');
 const { schemas, validate } = require('../utils/validate');
 const { audit } = require('../middleware/audit');
+const { buildAccountContext } = require('../engine/accountContext');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 async function getUserAiConfig(userId) {
@@ -204,35 +205,16 @@ router.post('/chat/:accountId', async (req, res, next) => {
     if (!question?.trim()) return res.status(400).json({ error: 'question is required' });
     if (question.length > 500) return res.status(400).json({ error: 'question too long (max 500 chars)' });
 
-    // Account read — scoped to org (accounts is Tier B)
-    const { data: account } = await supabase
-      .from('accounts')
-      .select(`
-        id, name, health_score, churn_risk, nps, ces, product_usage,
-        arr, plan, stage, open_tickets, renewal_date, last_contact, notes,
-        activity_log ( type, logged_at, note ),
-        milestones    ( text, done ),
-        tasks         ( title, priority, due_date, done )
-      `)
-      .eq('id', req.params.accountId)
-      .eq('org_id', req.orgId)
-      .maybeSingle();
+    // Build rich account context — scoped to org, query-steered semantic retrieval
+    const context = await buildAccountContext({
+      orgId: req.orgId, accountId: req.params.accountId, userId: req.userId,
+      options: { query: question, semanticLimit: 8, maxTotalChars: 12000 },
+    });
 
-    if (!account) return res.status(404).json({ error: 'Account not found' });
-
-    const daysAgo = d => d ? Math.round((Date.now() - new Date(d).getTime()) / 86_400_000) : null;
-
-    const snapshot = [
-      `Account: ${account.name}`,
-      `Health: ${account.health_score}/100, Stage: ${account.stage}, Churn Risk: ${account.churn_risk}%`,
-      `ARR: $${(account.arr || 0).toLocaleString()}, Renewal: ${account.renewal_date || '—'}`,
-      `Last Contact: ${daysAgo(account.last_contact) ?? '—'}d ago, Open Tickets: ${account.open_tickets}`,
-      `NPS: ${account.nps ?? '—'}, CES: ${account.ces ?? '—'}/5, Usage: ${account.product_usage ?? '—'}%`,
-      `Notes: ${account.notes || 'none'}`,
-      `Activity: ${(account.activity_log || []).slice(0,5).map(l => `${l.type} ${daysAgo(l.logged_at)}d ago${l.note ? ': '+l.note : ''}`).join('; ') || 'none'}`,
-      `Tasks: ${(account.tasks||[]).filter(t=>!t.done).map(t=>`${t.title} [${t.priority}]`).join(', ') || 'none'}`,
-      `Milestones pending: ${(account.milestones||[]).filter(m=>!m.done).map(m=>m.text).join(', ') || 'none'}`,
-    ].join('\n');
+    // profile.available is false when the account row was not found for this org
+    if (!context.sections.profile?.available) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
 
     // Build conversation for multi-turn Q&A
     // Limit history to last 6 turns to keep token usage reasonable
@@ -247,9 +229,9 @@ router.post('/chat/:accountId', async (req, res, next) => {
     ];
 
     const answer = await callAI(config, {
-      system: `You are a Customer Success assistant. Answer questions about the following account based only on the data provided. Be concise (2-4 sentences). If the data doesn't support a definitive answer, say so.\n\n${safeBlock('account_data', snapshot)}`,
+      system: `You are a Customer Success assistant. Answer questions about the following account based only on the data provided. If the data doesn't support a definitive answer, say so explicitly. All dates in the data are pre-computed with relative ages — no date arithmetic is needed.\n\n${safeBlock('account_data', context.text)}`,
       user: messages.map(m => `${m.role === 'assistant' ? 'Assistant' : 'CSM'}: ${m.content}`).join('\n\n'),
-      maxTokens: 300,
+      maxTokens: 500,
     });
 
     audit(req.userId, 'ai.chat', { resourceType: 'account', resourceId: req.params.accountId, req });

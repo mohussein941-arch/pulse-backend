@@ -27,6 +27,12 @@ function applyBudget(text, budget) {
   return { out: text.slice(0, cut) + '…[truncated]', truncated: true };
 }
 
+// ── Inline field truncation with ellipsis ─────────────────────────────────────
+function trunc(str, n) {
+  if (!str || str.length <= n) return str || '';
+  return str.slice(0, n) + '…';
+}
+
 // ── Generic item-count extractor ──────────────────────────────────────────────
 function computeItemCounts(data) {
   if (!data || typeof data !== 'object') return {};
@@ -62,16 +68,15 @@ const SECTIONS = [
         ].join(', '))
         .eq('id', accountId).eq('org_id', orgId)
         .maybeSingle();
-      return { account: data };
+      return data ? { account: data } : null;
     },
     render({ account }, { now }) {
-      if (!account) return 'Account not found.';
       const lines = [
         `Name: ${account.name}`,
-        `Industry: ${account.industry || 'unknown'}`,
+        account.industry ? `Industry: ${account.industry}` : null,
         `Plan: ${account.plan || 'unknown'} | Stage: ${account.stage || 'unknown'}`,
         `ARR: ${account.arr != null ? `$${Number(account.arr).toLocaleString()}` : 'unknown'}`,
-        `Renewal: ${fmtDate(account.renewal_date, now)}`,
+        `Renewal: ${account.renewal_date ? fmtDate(account.renewal_date, now) : 'not set'}`,
         `Health: ${account.health_score ?? 'unknown'}/100 | Churn risk: ${account.churn_risk != null ? `${account.churn_risk}%` : 'unknown'}`,
         `NPS: ${account.nps ?? 'unknown'} | CES: ${account.ces ?? 'unknown'}`,
         `Product usage: ${account.product_usage != null ? `${account.product_usage}%` : 'unknown'}`,
@@ -325,7 +330,7 @@ const SECTIONS = [
         if (synthesis.recent_signals.length) {
           lines.push('Recent health signals:');
           for (const s of synthesis.recent_signals.slice(0, 3)) {
-            lines.push(`  ${fmtDate(s.occurred_at, now)} — ${s.direction}/${s.magnitude}: ${(s.rationale || '').slice(0, 120)}`);
+            lines.push(`  ${fmtDate(s.occurred_at, now)} — ${s.direction}/${s.magnitude}: ${trunc(s.rationale || '', 120)}`);
           }
         }
       } else {
@@ -413,7 +418,7 @@ const SECTIONS = [
       if (surveyResponses.length) {
         lines.push(`Survey responses (${surveyResponses.length}):`);
         for (const r of surveyResponses) {
-          const ans = r.custom_answer ? ` — "${r.custom_answer.slice(0, 200)}"` : '';
+          const ans = r.custom_answer ? ` — "${trunc(r.custom_answer, 200)}"` : '';
           lines.push(`  ${fmtDate(r.submitted_at, now)} | ${r.type} score: ${r.score}${ans}`);
         }
         lines.push('');
@@ -430,8 +435,8 @@ const SECTIONS = [
         lines.push(`Meeting notes (${meetings.length}):`);
         for (const m of meetings) {
           lines.push(`  ${fmtDate(m.meeting_date, now)} | ${m.title || 'Untitled'}`);
-          if (m.summary)      lines.push(`    Summary: ${m.summary.slice(0, 400)}`);
-          if (m.action_items) lines.push(`    Actions: ${m.action_items.slice(0, 200)}`);
+          if (m.summary)      lines.push(`    Summary: ${trunc(m.summary, 400)}`);
+          if (m.action_items) lines.push(`    Actions: ${trunc(m.action_items, 200)}`);
         }
         lines.push('');
       }
@@ -440,7 +445,7 @@ const SECTIONS = [
         lines.push(`Interactions (${interactions.length}):`);
         for (const i of interactions) {
           const dir  = i.direction ? ` [${i.direction}]` : '';
-          const body = (i.summary || (i.content || '')).slice(0, 300);
+          const body = trunc(i.summary || i.content || '', 300);
           lines.push(`  ${fmtDate(i.occurred_at, now)} | ${i.source}${dir}: ${body}`);
         }
       }
@@ -587,9 +592,9 @@ const SECTIONS = [
         `Product: ${profile.product_name || 'unknown'}${profile.website_url ? ` | ${profile.website_url}` : ''}`,
         `Status: ${profile.confirmed ? 'confirmed' : 'draft'} | Generated: ${fmtDate(profile.generated_at, now)}`,
       ];
-      if (profile.overview)    lines.push(`\nOverview: ${profile.overview.slice(0, 400)}`);
-      if (profile.icp)         lines.push(`ICP: ${profile.icp.slice(0, 300)}`);
-      if (profile.positioning) lines.push(`Positioning: ${profile.positioning.slice(0, 200)}`);
+      if (profile.overview)    lines.push(`\nOverview: ${trunc(profile.overview, 400)}`);
+      if (profile.icp)         lines.push(`ICP: ${trunc(profile.icp, 300)}`);
+      if (profile.positioning) lines.push(`Positioning: ${trunc(profile.positioning, 200)}`);
       if (features.length) {
         lines.push(`\nFeatures (${features.length}):`);
         for (const f of features) {
@@ -623,7 +628,7 @@ const SECTIONS = [
       return interactions.map((item, idx) => {
         const dir   = item.direction ? ` [${item.direction}]` : '';
         const label = `[${idx + 1}] ${fmtDate(item.occurred_at, now)} | ${item.source}${dir}`;
-        const body  = (item.summary || (item.content || '')).slice(0, 500);
+        const body  = trunc(item.summary || item.content || '', 500);
         return `${label}\n${body}`;
       }).join('\n\n');
     },
