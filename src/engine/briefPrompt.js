@@ -6,7 +6,7 @@
 
 const crypto = require('crypto');
 
-const BRIEF_PROMPT_VERSION = 'v5';
+const BRIEF_PROMPT_VERSION = 'v6';
 const BRIEF_MODEL = 'claude-sonnet-4-6';
 
 function promptVersionHash() {
@@ -54,7 +54,7 @@ Respond with a single JSON object. No markdown fences. No text before or after t
     {
       "topic": "<string>",
       "sentiment": "positive" | "neutral" | "negative",
-      "evidence": "<string: reference to a specific interaction from the Recent interactions section above>"
+      "evidence": "<string: reference to a specific interaction from the VOICE OF CUSTOMER or SEMANTIC CONTEXT sections above>"
     }
   ],
   "talking_points": [
@@ -89,10 +89,10 @@ Severity constraint: severity must be null if and only if description is null.
 4. talking_points must contain at least 1 entry and no more than 4.
 5. risks may be an empty array [] if no material risks are identified.
 6. playbooks may be an empty array [] if no applicable playbook is listed above.
-7. evidence in each theme must reference a specific interaction from the Recent interactions section above by date or brief description. Do not reference events that do not appear in that section.
+7. evidence in each theme must reference a specific interaction from the VOICE OF CUSTOMER or SEMANTIC CONTEXT sections above by date or brief description. Do not reference events that do not appear in those sections.
 8. Do not include personally identifiable information beyond what is present in the input above.
 9. playbooks[].name must exactly match a playbook name from the Applicable playbooks section above. If no playbook from that section applies, return playbooks: []. Do not invent playbook names.
-10. Any stakeholder name used in any field (themes, talking_points, risks) must exactly match a name from the Stakeholders section above. If a relevant person appears in an interaction but is not a listed stakeholder, refer to them by their role (e.g., "the technical lead on the April 12 thread") rather than inventing a name.
+10. Any stakeholder name used in any field (themes, talking_points, risks) must exactly match a name from the STAKEHOLDERS section above. If a relevant person appears in an interaction but is not a listed stakeholder, refer to them by their role (e.g., "the technical lead on the April 12 thread") rather than inventing a name.
 
 ## Language discipline
 

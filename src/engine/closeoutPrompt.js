@@ -6,14 +6,14 @@
 
 const crypto = require('crypto');
 
-const CLOSEOUT_PROMPT_VERSION = 'v1';
+const CLOSEOUT_PROMPT_VERSION = 'v2';
 const CLOSEOUT_MODEL = 'claude-sonnet-4-6';
 
 function promptVersionHash() {
   return crypto.createHash('sha256').update(CLOSEOUT_PROMPT_VERSION).digest('hex');
 }
 
-function buildCloseoutPrompt({ account, transcript, interactions, stakeholders, tasks, playbooks, csmProfile }) {
+function buildCloseoutPrompt({ contextText, transcript, playbooks, csmProfile }) {
   const {
     career_stage  = 'mid',
     specialty     = 'general_csm',
@@ -27,27 +27,9 @@ You are a senior Customer Success intelligence assistant. Analyse the meeting tr
 
 ${formatTranscript(transcript)}
 
-## Account
+## Account context
 
-Name: ${account.name}
-Health score: ${account.health_score ?? 'unknown'}
-Churn risk: ${account.churn_risk ?? 'unknown'}
-Renewal date: ${account.renewal_date ?? 'none on record'}
-Stage: ${account.stage ?? 'unknown'}
-NPS: ${account.nps ?? 'none on record'}
-CES: ${account.ces ?? 'none on record'}
-
-## Stakeholders
-
-${formatStakeholders(stakeholders)}
-
-## Recent interactions (5 most recent, for context only)
-
-${formatInteractions(interactions)}
-
-## Open tasks
-
-${formatTasks(tasks)}
+${contextText}
 
 ## Applicable playbooks
 
@@ -104,7 +86,7 @@ Respond with a single JSON object. No markdown fences. No text before or after t
 1. Respond with valid JSON only. No markdown fences. No prose before or after the JSON object.
 2. All required keys must be present. Arrays may be empty ([]) but the keys must be present.
 3. action_items must reflect what was actually said in the transcript. Do not invent commitments. If nothing was committed, return action_items: [].
-4. suggested_tasks must not duplicate any item already in the Open tasks section. Each suggested task must be a concrete CSM action, not a restatement of an action item.
+4. suggested_tasks must not duplicate any item already in the WORKSTREAMS section. Each suggested task must be a concrete CSM action, not a restatement of an action item.
 5. follow_up_email body must reference specific things from the meeting transcript by content (not by paraphrase of action items only). Subject is short and specific.
 6. crm_update_text is one short paragraph suitable for pasting into account notes — what happened and what's next; no salutation.
 7. sentiment must be one of: "positive", "neutral", "at_risk". Use "at_risk" (not "negative") for the negative pole.
@@ -129,31 +111,6 @@ Use contractions freely. Avoid corporate buzzwords (leverage, synergy, circle ba
 function formatTranscript(transcript) {
   if (!transcript || !transcript.trim()) return 'No transcript provided.';
   return transcript.trim();
-}
-
-function formatInteractions(interactions) {
-  if (!interactions?.length) return 'No recent interactions on record.';
-  return interactions.map((i, idx) => {
-    const date    = i.occurred_at ? new Date(i.occurred_at).toISOString().slice(0, 10) : 'unknown date';
-    const source  = i.source ?? 'unknown';
-    const content = (i.summary || i.content || '').slice(0, 600);
-    return `[${idx + 1}] ${date} | ${source}\n${content}`;
-  }).join('\n\n');
-}
-
-function formatStakeholders(stakeholders) {
-  if (!stakeholders?.length) return 'No stakeholders on record.';
-  return stakeholders.map(s =>
-    `- ${s.name}${s.role ? ` (${s.role})` : ''}${s.email ? ` <${s.email}>` : ''}`
-  ).join('\n');
-}
-
-function formatTasks(tasks) {
-  if (!tasks?.length) return 'No open tasks.';
-  return tasks.map(t => {
-    const due = t.due_date ? ` — due ${t.due_date}` : '';
-    return `- [${t.priority}] ${t.title}${due}`;
-  }).join('\n');
 }
 
 function formatPlaybooks(playbooks) {

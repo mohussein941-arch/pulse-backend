@@ -10,7 +10,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const { buildCloseoutPrompt, CLOSEOUT_MODEL, CLOSEOUT_PROMPT_VERSION } = require('./closeoutPrompt');
 const { validateCloseoutOutput, CloseoutValidationError }               = require('./closeoutValidator');
-const { getContext }                                                     = require('../services/context-engine/retrieval');
+const { buildAccountContext }                                            = require('./accountContext');
 const defaultSupabase                                                    = require('../supabase');
 
 // Lazy singleton — avoids requiring ANTHROPIC_API_KEY at module load time
@@ -28,59 +28,10 @@ function getAnthropic() {
 const COST_INPUT_PER_TOKEN  = 3  / 1_000_000;
 const COST_OUTPUT_PER_TOKEN = 15 / 1_000_000;
 
-// ── Base context loader ───────────────────────────────────────────────────────
-// Mirrors M2's loadContext minus the interactions query. Interactions come from
-// getContext (semantic retrieval) in step 5 of generateCloseout.
-// Intentional duplication — no cross-engine imports during M3 (see TECH_DEBT.md).
-
-async function loadBaseContext({ orgId, accountId, userId, db }) {
-  const { data: account, error: accountErr } = await db
-    .from('accounts')
-    .select('id, name, health_score, churn_risk, renewal_date, stage, nps, ces, active_playbook_id, updated_at')
-    .eq('id', accountId)
-    .eq('org_id', orgId)
-    .maybeSingle();
-
-  if (accountErr || !account) return null;
-
-  const [
-    { data: rawStakeholders },
-    { data: rawTasks },
-    { data: csmProfile },
-  ] = await Promise.all([
-    db.from('stakeholders')
-      .select('id, name, role, email, updated_at')
-      .eq('account_id', accountId)
-      .eq('org_id', orgId),
-
-    db.from('tasks')
-      .select('id, title, priority, due_date, updated_at')
-      .eq('account_id', accountId)
-      .eq('org_id', orgId)
-      .eq('done', false),
-
-    db.from('csm_profile')
-      .select('career_stage, specialty, working_style, updated_at')
-      .eq('id', userId)
-      .eq('org_id', orgId)
-      .maybeSingle(),
-  ]);
-
-  const { data: rawPlaybooks } = await db
-    .from('playbooks')
-    .select('id, name, description')
-    .or(`org_id.is.null,org_id.eq.${orgId}`)
-    .eq('active', true)
-    .order('id', { ascending: true });
-
-  return {
-    account,
-    stakeholders: rawStakeholders || [],
-    tasks:        rawTasks        || [],
-    playbooks:    rawPlaybooks    || [],
-    csmProfile:   csmProfile      || null,
-  };
-}
+// Deterministic section set — excludes semantic_context (run separately on cache miss).
+const DET_SECTIONS = [
+  'profile', 'stakeholders', 'workstreams', 'health_trajectory', 'support', 'opportunities',
+];
 
 // ── Claude call ───────────────────────────────────────────────────────────────
 
@@ -193,57 +144,72 @@ async function generateCloseout({ orgId, meetingNotesId, userId, supabaseClient 
     );
   }
 
-  // 4. Load base account context (account, stakeholders, tasks, playbooks, csmProfile).
-  const baseContext = await loadBaseContext({
-    orgId,
-    accountId: meetingRow.account_id,
-    userId,
-    db,
+  // 4. Load csmProfile and playbooks as discrete prompt inputs.
+  const [{ data: csmProfile }, { data: rawPlaybooks }] = await Promise.all([
+    db.from('csm_profile')
+      .select('career_stage, specialty, working_style, updated_at')
+      .eq('id', userId)
+      .eq('org_id', orgId)
+      .maybeSingle(),
+    db.from('playbooks')
+      .select('id, name, description')
+      .or(`org_id.is.null,org_id.eq.${orgId}`)
+      .eq('active', true)
+      .order('id', { ascending: true }),
+  ]);
+  const playbooks = rawPlaybooks || [];
+
+  // 5. Deterministic account context — no vector cost, no semantic query.
+  const detContext = await buildAccountContext({
+    orgId, accountId: meetingRow.account_id, userId, db,
+    options: {
+      sections:      DET_SECTIONS,
+      maxTotalChars: 9000,
+    },
   });
 
-  if (!baseContext) {
+  if (!detContext.sections.profile?.available) {
     throw new Error(
       'Account data could not be loaded. The account may have been deleted.'
     );
   }
 
-  // 5. Semantic-retrieve related interactions via getContext.
-  //    Query = meeting summary. Skip entirely if summary is absent.
-  let retrieved = [];
+  // 6. Semantic context — only when the meeting row carries a summary.
+  //    The transcript interaction is excluded so it cannot cite itself.
+  let semText = '';
   const querySummary = (meetingRow.summary || '').trim();
   if (querySummary) {
-    const result = await getContext(querySummary, {
-      orgId,
-      accountId:  meetingRow.account_id,
-      limit:      6,
-      createdBy:  userId,
-    });
-    retrieved = result.interactions || [];
+    try {
+      const sem = await buildAccountContext({
+        orgId, accountId: meetingRow.account_id, userId, db,
+        options: {
+          sections:             ['semantic_context'],
+          query:                querySummary,
+          semanticLimit:        6,
+          excludeInteractionIds: [transcriptInteraction.id],
+        },
+      });
+      if (sem.sections.semantic_context?.available && sem.text) {
+        semText = sem.text;
+      }
+    } catch (err) {
+      console.warn(`[closeout] semantic context failed, continuing without: ${err.message}`);
+    }
   }
 
-  // 6. Remove the current transcript from retrieved list; slice to 5.
-  //    Map to the shape briefGenerator's loadContext produces so
-  //    closeoutPrompt's formatInteractions works without modification.
-  const interactions = retrieved
-    .filter(i => i.id !== transcriptInteraction.id)
-    .slice(0, 5)
-    .map(i => ({
-      ...i,
-      summary: i.summary ?? i.metadata?.summary ?? null,
-    }));
+  const contextText = semText
+    ? `${detContext.text}\n\n${semText}`
+    : detContext.text;
 
-  // 7–8. Build prompt.
+  // 7. Build prompt.
   const basePrompt = buildCloseoutPrompt({
-    account:      baseContext.account,
-    transcript:   transcriptInteraction.content,
-    interactions,
-    stakeholders: baseContext.stakeholders,
-    tasks:        baseContext.tasks,
-    playbooks:    baseContext.playbooks,
-    csmProfile:   baseContext.csmProfile,
+    contextText,
+    transcript: transcriptInteraction.content,
+    playbooks,
+    csmProfile: csmProfile || null,
   });
 
-  // 9–10. Call Claude with exactly one retry on CloseoutValidationError.
+  // 8–9. Call Claude with exactly one retry on CloseoutValidationError.
   let content;
   let traceInfo;
 
@@ -270,7 +236,7 @@ async function generateCloseout({ orgId, meetingNotesId, userId, supabaseClient 
     }
   }
 
-  // 11. Upsert into closeouts.
+  // 10. Upsert into closeouts.
   //     onConflict = 'org_id,meeting_notes_id' overwrites the existing row,
   //     which is the correct behaviour when prompt_version differed in step 1.
   const { error: upsertErr } = await db
@@ -293,7 +259,7 @@ async function generateCloseout({ orgId, meetingNotesId, userId, supabaseClient 
     console.error('[closeoutGenerator] closeouts upsert failed:', upsertErr.message);
   }
 
-  // 12. Write ai_traces (best-effort — a trace failure must not block the response)
+  // 11. Write ai_traces (best-effort — a trace failure must not block the response)
   if (traceInfo) {
     writeTrace({
       orgId,
@@ -304,7 +270,7 @@ async function generateCloseout({ orgId, meetingNotesId, userId, supabaseClient 
     }).catch(() => {});
   }
 
-  // 13. Return
+  // 12. Return
   return { content, fromCache: false };
 }
 
