@@ -72,7 +72,7 @@ async function generateEscalationBrief({ orgId, accountId, userId, db = defaultS
 
   const escalationQuery = account.escalation_reason || 'escalation root cause and account risk';
 
-  const [context, tickets] = await Promise.all([
+  const [context, tickets, meetings] = await Promise.all([
     buildAccountContext({
       orgId, accountId, userId, db,
       options: {
@@ -86,6 +86,17 @@ async function generateEscalationBrief({ orgId, accountId, userId, db = defaultS
       console.error('[escalationBrief] ticket fetch failed:', e.message);
       return { open: [], critical: [], ageing: [], counts: { open: 0, critical: 0, ageing: 0 } };
     }),
+    db.from('meeting_notes')
+      .select('title, meeting_date, summary')
+      .eq('account_id', accountId)
+      .eq('org_id', orgId)
+      .order('meeting_date', { ascending: false })
+      .limit(3)
+      .then(({ data }) => (data || []).map(m => ({
+        title:   m.title        || null,
+        date:    m.meeting_date ? m.meeting_date.slice(0, 10) : null,
+        summary: m.summary      || null,
+      }))),
   ]);
 
   let ai = null;
@@ -128,6 +139,7 @@ async function generateEscalationBrief({ orgId, accountId, userId, db = defaultS
       counts: tickets.counts,
       critical: tickets.critical.slice(0, 10),
     },
+    recent_meetings: meetings,
     ai,
     generated_at: new Date().toISOString(),
     generated_by: userId,
