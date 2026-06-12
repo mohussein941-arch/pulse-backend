@@ -763,10 +763,10 @@ async function buildAccountContext({ orgId, accountId, userId, db: dbArg, option
   if (scEntry && scEntry.data && Array.isArray(scEntry.data.interactions)) {
     const finalScText = sectionTexts['semantic_context'] || '';
     scEntry.data.interactions.forEach((item, idx) => {
-      const marker = `[${idx + 1}]`;
-      if (finalScText.includes(marker)) {
+      const n = idx + 1;
+      if (finalScText.includes(`[${n}] `)) {
         citations.push({
-          marker,
+          marker:      n,
           id:          item.id,
           source:      item.source,
           occurred_at: item.occurred_at,
