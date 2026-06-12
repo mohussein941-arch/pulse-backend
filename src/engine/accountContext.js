@@ -619,7 +619,10 @@ const SECTIONS = [
         limit:     options.semanticLimit || 10,
         createdBy: userId,
       });
-      return { interactions: result.interactions || [] };
+      const filtered = (result.interactions || []).filter(
+        i => i.account_id === accountId || i.account_id == null
+      );
+      return { interactions: filtered };
     },
     render(data, { now }) {
       if (!data) return null; // no query provided
