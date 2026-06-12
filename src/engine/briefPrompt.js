@@ -6,14 +6,14 @@
 
 const crypto = require('crypto');
 
-const BRIEF_PROMPT_VERSION = 'v4';
+const BRIEF_PROMPT_VERSION = 'v5';
 const BRIEF_MODEL = 'claude-sonnet-4-6';
 
 function promptVersionHash() {
   return crypto.createHash('sha256').update(BRIEF_PROMPT_VERSION).digest('hex');
 }
 
-function buildBriefPrompt({ account, interactions, stakeholders, tasks, playbooks, csmProfile }) {
+function buildBriefPrompt({ contextText, playbooks, csmProfile }) {
   const {
     career_stage  = 'mid',
     specialty     = 'general_csm',
@@ -23,27 +23,9 @@ function buildBriefPrompt({ account, interactions, stakeholders, tasks, playbook
   return `
 You are a senior Customer Success intelligence assistant. Generate a concise, structured pre-meeting brief for a CSM who is about to meet with the account below.
 
-## Account
+## Account context
 
-Name: ${account.name}
-Health score: ${account.health_score ?? 'unknown'}
-Churn risk: ${account.churn_risk ?? 'unknown'}
-Renewal date: ${account.renewal_date ?? 'none on record'}
-Stage: ${account.stage ?? 'unknown'}
-NPS: ${account.nps ?? 'none on record'}
-CES: ${account.ces ?? 'none on record'}
-
-## Stakeholders
-
-${formatStakeholders(stakeholders)}
-
-## Recent interactions
-
-${formatInteractions(interactions)}
-
-## Open tasks
-
-${formatTasks(tasks)}
+${contextText}
 
 ## Applicable playbooks
 
@@ -122,31 +104,6 @@ Use contractions freely. Avoid corporate buzzwords (leverage, synergy, circle ba
 
 
 // ── Section formatters ────────────────────────────────────────────────────────
-
-function formatInteractions(interactions) {
-  if (!interactions?.length) return 'No recent interactions on record.';
-  return interactions.map((i, idx) => {
-    const date    = i.occurred_at ? new Date(i.occurred_at).toISOString().slice(0, 10) : 'unknown date';
-    const source  = i.source ?? 'unknown';
-    const content = (i.summary || i.content || '').slice(0, 600);
-    return `[${idx + 1}] ${date} | ${source}\n${content}`;
-  }).join('\n\n');
-}
-
-function formatStakeholders(stakeholders) {
-  if (!stakeholders?.length) return 'No stakeholders on record.';
-  return stakeholders.map(s =>
-    `- ${s.name}${s.role ? ` (${s.role})` : ''}${s.email ? ` <${s.email}>` : ''}`
-  ).join('\n');
-}
-
-function formatTasks(tasks) {
-  if (!tasks?.length) return 'No open tasks.';
-  return tasks.map(t => {
-    const due = t.due_date ? ` — due ${t.due_date}` : '';
-    return `- [${t.priority}] ${t.title}${due}`;
-  }).join('\n');
-}
 
 function formatPlaybooks(playbooks) {
   if (!playbooks?.length) return 'None applicable.';

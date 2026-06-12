@@ -619,8 +619,10 @@ const SECTIONS = [
         limit:     options.semanticLimit || 10,
         createdBy: userId,
       });
+      const excludeSet = new Set(options.excludeInteractionIds || []);
       const filtered = (result.interactions || []).filter(
-        i => i.account_id === accountId || i.account_id == null
+        i => (i.account_id === accountId || i.account_id == null) &&
+             !excludeSet.has(i.id)
       );
       return { interactions: filtered };
     },

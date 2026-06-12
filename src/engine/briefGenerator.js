@@ -3,19 +3,20 @@
 // Orchestrates pre-meeting brief generation with a 6-tuple cache key:
 //   (org_id, account_id, user_id, model_id, prompt_version_hash, data_state_hash)
 //
-// Cache lifetime: 24 hours (set by expires_at on insert; controlled in briefs table).
+// Cache lifetime: 24 hours (expires_at on insert; controlled in briefs table).
 // Two CSMs on the same account get distinct cached briefs (user_id in key).
 // Changing BRIEF_MODEL bypasses the cache (model_id in key).
 // Changing prompt text bumps BRIEF_PROMPT_VERSION → new prompt_version_hash → cache miss.
-// Adding or editing any account data moves data_state_hash → cache miss.
+// Any account data change alters buildAccountContext output → data_state_hash changes
+// → cache miss. All account gathering is delegated to the assembler.
 
 const Anthropic = require('@anthropic-ai/sdk');
 
 const { buildBriefPrompt, promptVersionHash, BRIEF_MODEL } = require('./briefPrompt');
 const { dataStateHash }                                    = require('./dataStateHash');
 const { validateBriefOutput, BriefValidationError }        = require('./briefValidator');
+const { buildAccountContext }                              = require('./accountContext');
 const defaultSupabase                                       = require('../supabase');
-const { getContext }                                        = require('../services/context-engine/retrieval');
 
 // Lazy singleton — avoids requiring ANTHROPIC_API_KEY at module load time
 let _anthropic = null;
@@ -32,73 +33,45 @@ function getAnthropic() {
 const COST_INPUT_PER_TOKEN  = 3  / 1_000_000;
 const COST_OUTPUT_PER_TOKEN = 15 / 1_000_000;
 
-// ── Context loader ────────────────────────────────────────────────────────────
+// Deterministic section set — no semantic query, so no vector cost pre-cache.
+// semantic_context is excluded here; it runs only on cache miss (step 5).
+const DET_SECTIONS = [
+  'profile', 'stakeholders', 'workstreams', 'onboarding',
+  'health_trajectory', 'voice_of_customer', 'support',
+  'history', 'opportunities', 'product_knowledge',
+];
+
+// ── Minimal context loader ─────────────────────────────────────────────────────
+// Three things only: account existence check (404 contract), csm_profile, playbooks.
+// All other account gathering is delegated to buildAccountContext.
 
 async function loadContext({ orgId, accountId, userId, db }) {
-  // Account — org ownership check is baked into the WHERE clause
   const { data: account, error: accountErr } = await db
     .from('accounts')
-    .select('id, name, health_score, churn_risk, renewal_date, stage, nps, ces, active_playbook_id, updated_at')
+    .select('id, name')
     .eq('id', accountId)
     .eq('org_id', orgId)
     .maybeSingle();
 
   if (accountErr || !account) return null; // caller returns 404
 
-  // Parallel loads — none depend on each other
-  const [
-    { data: rawInteractions },
-    { data: rawStakeholders },
-    { data: rawTasks },
-    { data: csmProfile },
-  ] = await Promise.all([
-    db.from('interactions')
-      .select('id, source, content, metadata, occurred_at, updated_at')
-      .eq('account_id', accountId)
-      .eq('org_id', orgId)
-      .order('occurred_at', { ascending: false })
-      .limit(20),
-
-    db.from('stakeholders')
-      .select('id, name, role, email, updated_at')
-      .eq('account_id', accountId)
-      .eq('org_id', orgId),
-
-    db.from('tasks')
-      .select('id, title, priority, due_date, updated_at')
-      .eq('account_id', accountId)
-      .eq('org_id', orgId)
-      .eq('done', false),
-
+  const [{ data: csmProfile }, { data: rawPlaybooks }] = await Promise.all([
     db.from('csm_profile')
       .select('career_stage, specialty, working_style, updated_at')
       .eq('id', userId)
       .eq('org_id', orgId)
       .maybeSingle(),
+    db.from('playbooks')
+      .select('id, name, description')
+      .or(`org_id.is.null,org_id.eq.${orgId}`)
+      .eq('active', true)
+      .order('id', { ascending: true }),
   ]);
-
-  // Load all active playbooks — system (org_id IS NULL) and org-specific
-  const { data: rawPlaybooks } = await db
-    .from('playbooks')
-    .select('id, name, description')
-    .or(`org_id.is.null,org_id.eq.${orgId}`)
-    .eq('active', true)
-    .order('id', { ascending: true });
-  const playbooks = rawPlaybooks || [];
-
-  // Lift summary out of metadata so briefPrompt formatters find it on i.summary
-  const interactions = (rawInteractions || []).map(i => ({
-    ...i,
-    summary: i.metadata?.summary || null,
-  }));
 
   return {
     account,
-    interactions,
-    stakeholders: rawStakeholders || [],
-    tasks:        rawTasks        || [],
-    playbooks,
-    csmProfile:   csmProfile      || null,
+    csmProfile:  csmProfile   || null,
+    playbooks:   rawPlaybooks || [],
   };
 }
 
@@ -166,15 +139,27 @@ function parseAndValidate(rawText, { stakeholderNames, playbookNames }) {
 async function generateBrief({ orgId, accountId, userId, supabaseClient }) {
   const db = supabaseClient || defaultSupabase;
 
-  // 1. Load context (null → account not found / wrong org)
-  const context = await loadContext({ orgId, accountId, userId, db });
-  if (!context) return null;
+  // 1. Account existence + csm_profile + playbooks (null → 404)
+  const minCtx = await loadContext({ orgId, accountId, userId, db });
+  if (!minCtx) return null;
 
-  // 2. Compute cache key components
+  const { account, csmProfile, playbooks } = minCtx;
+
+  // 2. Build deterministic assembled context — no semantic query, no vector cost pre-cache.
+  //    Output feeds data_state_hash; any account data change busts the cache automatically.
+  const detContext = await buildAccountContext({
+    orgId, accountId, userId, db,
+    options: {
+      sections:      DET_SECTIONS,
+      maxTotalChars: 12000,
+    },
+  });
+
+  // 3. Compute cache key components
   const pvHash = promptVersionHash();
-  const dsHash = dataStateHash(context);
+  const dsHash = dataStateHash({ contextText: detContext.text, csmProfile, playbooks });
 
-  // 3. Cache lookup — all 6 dimensions must match AND brief must not be expired
+  // 4. Cache lookup — all 6 dimensions must match AND brief must not be expired
   const { data: cached } = await db
     .from('briefs')
     .select('content')
@@ -191,28 +176,41 @@ async function generateBrief({ orgId, accountId, userId, supabaseClient }) {
     return { content: cached.content, fromCache: true };
   }
 
-  // M0.1 — replace the recency context with relevance-ranked retrieval, for the prompt only.
-  // dsHash is already computed above from loadContext's deterministic set, so the cache key
-  // is unaffected. getContext runs only here (cache miss), never on a cache hit.
+  // 5. Cache miss — add relevance-ranked semantic context for the prompt.
+  //    dsHash is already fixed above; semantic output does not affect caching.
+  let semText = '';
   try {
-    const retrieval = await getContext(
-      `Pre-meeting context for ${context.account.name}: recent activity, open risks, blockers, sentiment, renewal status, and outstanding commitments`,
-      { orgId, accountId, limit: 12, createdBy: userId }
-    );
-    if (retrieval?.interactions?.length) {
-      context.interactions = retrieval.interactions;
+    const sem = await buildAccountContext({
+      orgId, accountId, userId, db,
+      options: {
+        sections:      ['semantic_context'],
+        query:         `Pre-meeting context for ${account.name}: recent activity, open risks, blockers, sentiment, renewal status, and outstanding commitments`,
+        semanticLimit: 12,
+      },
+    });
+    if (sem.sections.semantic_context?.available && sem.text) {
+      semText = sem.text;
     }
   } catch (err) {
-    // Non-fatal: keep the recency context loadContext already provided.
-    console.warn(`[brief] getContext failed, using recency context: ${err.message}`);
+    // Non-fatal: proceed with deterministic context only.
+    console.warn(`[brief] semantic context failed, continuing without: ${err.message}`);
   }
 
-  // 4. Build validation sets from loaded context
-  const stakeholderNames = context.stakeholders.map(s => s.name);
-  const playbookNames    = context.playbooks.map(p => p.name);
-  const basePrompt       = buildBriefPrompt(context);
+  const promptContextText = semText
+    ? `${detContext.text}\n\n${semText}`
+    : detContext.text;
 
-  // 5. Call Claude with exactly one retry on BriefValidationError
+  // 6. Build validation sets from assembled context
+  //    stakeholder names: extract from rendered stakeholders section text
+  const stakeholdersText = detContext.sections.stakeholders?.text || '';
+  const stakeholderNames = stakeholdersText === 'No stakeholders on record.'
+    ? []
+    : stakeholdersText.split('\n').map(l => l.split(' | ')[0].trim()).filter(Boolean);
+  const playbookNames = playbooks.map(p => p.name);
+
+  const basePrompt = buildBriefPrompt({ contextText: promptContextText, playbooks, csmProfile });
+
+  // 7. Call Claude with exactly one retry on BriefValidationError
   let content;
   let traceInfo;
 
@@ -239,12 +237,12 @@ async function generateBrief({ orgId, accountId, userId, supabaseClient }) {
     }
   }
 
-  // 6. Write ai_traces (best-effort — a trace failure must not block the response)
+  // 8. Write ai_traces (best-effort — a trace failure must not block the response)
   if (traceInfo) {
     writeTrace({ orgId, accountId, userId, ...traceInfo, db }).catch(() => {});
   }
 
-  // 7. Persist to briefs cache
+  // 9. Persist to briefs cache
   // Upsert on the unique constraint so concurrent requests don't double-insert
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const { error: upsertErr } = await db
