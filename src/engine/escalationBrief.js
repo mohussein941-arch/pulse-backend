@@ -1,6 +1,9 @@
+'use strict';
+
 const Anthropic = require('@anthropic-ai/sdk');
 const defaultSupabase = require('../supabase');
 const { getAccountTickets } = require('../services/tickets');
+const { buildAccountContext } = require('./accountContext');
 
 const ESCALATION_MODEL = 'claude-sonnet-4-6';
 const COST_INPUT_PER_TOKEN = 3 / 1_000_000;
@@ -39,85 +42,13 @@ async function writeTrace({ orgId, accountId, userId, inputTokens, outputTokens,
   } catch (e) { /* best-effort trace */ }
 }
 
-function buildEscalationPrompt({ account, recentMeetings, openTasks, stakeholders, tickets }) {
-  const meetingsText = recentMeetings.length
-    ? recentMeetings.map((m, i) =>
-        `Meeting ${i + 1} — ${m.title || 'Untitled'} (${m.date || 'no date'})\nSummary: ${m.summary || 'none'}\nAction items: ${m.action_items || 'none'}`
-      ).join('\n\n')
-    : 'No recent meetings on record.';
-  const tasksText = openTasks.length
-    ? openTasks.map(t => `- [${t.priority || 'normal'}] ${t.title}${t.due_date ? ` (due ${t.due_date})` : ''}`).join('\n')
-    : 'No open tasks.';
-  const stakeText = stakeholders.length
-    ? stakeholders.map(s => `- ${s.name}${s.title ? `, ${s.title}` : ''}${s.sentiment ? ` — sentiment: ${s.sentiment}` : ''}`).join('\n')
-    : 'No stakeholders on record.';
-
-  // Support tickets — prefer the synced individual-ticket detail; fall back to
-  // the bare account.open_tickets count for connectors that don't emit tickets.
-  const ticketsText = (() => {
-    const counts = tickets?.counts || { open: 0, critical: 0, ageing: 0 };
-    if (counts.open > 0) {
-      const header = `Open tickets: ${counts.open} (critical: ${counts.critical}, ageing >7d: ${counts.ageing})`;
-      const list = (tickets.critical || []).slice(0, 8).map(t =>
-        `- [${t.priority}] ${t.subject}${t.ageDays != null ? ` (open ${t.ageDays} day${t.ageDays === 1 ? '' : 's'})` : ''}`
-      );
-      return list.length
-        ? `${header}\nMost critical open tickets:\n${list.join('\n')}`
-        : `${header}\nNo high/urgent tickets among the open set.`;
-    }
-    if ((account.open_tickets ?? 0) > 0) {
-      return `Open tickets: ${account.open_tickets} (individual ticket detail not synced for this connector).`;
-    }
-    return 'No open support tickets on record.';
-  })();
-
-  const now = new Date();
-  const renewalText = (() => {
-    if (!account.renewal_date) return 'none on record';
-    const days = Math.ceil((new Date(account.renewal_date) - now) / 86400000);
-    if (Number.isNaN(days)) return account.renewal_date;
-    if (days < 0) return `${account.renewal_date} — OVERDUE by ${Math.abs(days)} days`;
-    const months = Math.round(days / 30.44);
-    return `${account.renewal_date} — about ${months} month${months === 1 ? '' : 's'} (${days} days) away`;
-  })();
-  const escalationText = (() => {
-    if (!account.escalation_since) return 'unknown';
-    const days = Math.floor((now - new Date(account.escalation_since)) / 86400000);
-    if (Number.isNaN(days) || days < 0) return account.escalation_since;
-    return `${account.escalation_since} (escalated ${days} day${days === 1 ? '' : 's'} ago)`;
-  })();
-
+function buildEscalationPrompt(contextText) {
   return `You are helping a Customer Success Manager frame an escalated account so a cross-functional team (Product, Tech Support, CS leadership) can rally around it quickly.
 
 Write in plain, direct, factual language. No marketing tone, no filler, no hype. Ground every statement in the data below — do not invent facts.
 
-## Account
-Name: ${account.name}
-Stage: ${account.stage ?? 'unknown'}
-ARR: ${account.arr ?? 'unknown'}
-Health score: ${account.health_score ?? 'unknown'}
-Churn risk: ${account.churn_risk ?? 'unknown'}
-NPS: ${account.nps ?? 'none'}
-CES: ${account.ces ?? 'none'}
-Open tickets: ${account.open_tickets ?? 0}
-Renewal: ${renewalText}
-
-## Why it's escalated
-Reason: ${account.escalation_reason || 'not specified'}
-CSM notes: ${account.escalation_notes || 'none'}
-Escalated since: ${escalationText}
-
-## Recent meetings
-${meetingsText}
-
-## Open tasks
-${tasksText}
-
-## Stakeholders
-${stakeText}
-
-## Support tickets
-${ticketsText}
+## Account context
+${contextText}
 
 ## Your output
 Reply with RAW JSON only — no markdown, no code fences, no preamble. Schema:
@@ -127,7 +58,7 @@ Reply with RAW JSON only — no markdown, no code fences, no preamble. Schema:
   "recommended_actions": [{"team": "Product | Tech Support | CS | Sales", "action": "concrete next step that team should own"}]
 }
 Keep challenges to the 3-5 most important. Keep recommended_actions concrete and assigned to the team best placed to act.
-Do NOT compute or estimate any dates or time spans yourself. Use the renewal distance and time-since-escalation exactly as provided in the data above; never restate them as a different number of days, weeks, or months.`;
+Do NOT compute or estimate any dates or time spans yourself. Use the dates exactly as provided in the data above; never restate them as a different number of days, weeks, or months.`;
 }
 
 async function generateEscalationBrief({ orgId, accountId, userId, db = defaultSupabase }) {
@@ -139,43 +70,28 @@ async function generateEscalationBrief({ orgId, accountId, userId, db = defaultS
     .maybeSingle();
   if (!account) return null;
 
-  const { data: meetings } = await db
-    .from('meeting_notes')
-    .select('title, meeting_date, summary, action_items')
-    .eq('account_id', accountId)
-    .eq('org_id', orgId)
-    .order('meeting_date', { ascending: false })
-    .limit(3);
+  const escalationQuery = account.escalation_reason || 'escalation root cause and account risk';
 
-  const { data: openTasks } = await db
-    .from('tasks')
-    .select('title, priority, due_date')
-    .eq('account_id', accountId)
-    .eq('org_id', orgId)
-    .eq('done', false)
-    .order('due_date', { ascending: true });
-
-  const { data: stakeholders } = await db
-    .from('stakeholders')
-    .select('name, title, role, sentiment')
-    .eq('account_id', accountId)
-    .eq('org_id', orgId);
-
-  const recentMeetings = (meetings || []).map(m => ({
-    date: m.meeting_date, title: m.title, summary: m.summary, action_items: m.action_items,
-  }));
-
-  let tickets = { open: [], critical: [], ageing: [], counts: { open: 0, critical: 0, ageing: 0 } };
-  try {
-    tickets = await getAccountTickets({ orgId, accountId, db });
-  } catch (e) {
-    console.error('[escalationBrief] ticket fetch failed:', e.message);
-  }
+  const [context, tickets] = await Promise.all([
+    buildAccountContext({
+      orgId, accountId, userId, db,
+      options: {
+        sections: ['profile', 'stakeholders', 'workstreams', 'voice_of_customer', 'support', 'history', 'opportunities'],
+        query: escalationQuery,
+        semanticLimit: 8,
+        maxTotalChars: 11000,
+      },
+    }),
+    getAccountTickets({ orgId, accountId, db }).catch(e => {
+      console.error('[escalationBrief] ticket fetch failed:', e.message);
+      return { open: [], critical: [], ageing: [], counts: { open: 0, critical: 0, ageing: 0 } };
+    }),
+  ]);
 
   let ai = null;
   let traceInfo = null;
   try {
-    const prompt = buildEscalationPrompt({ account, recentMeetings, openTasks: openTasks || [], stakeholders: stakeholders || [], tickets });
+    const prompt = buildEscalationPrompt(context.text);
     const result = await callClaude(prompt);
     traceInfo = { inputTokens: result.inputTokens, outputTokens: result.outputTokens, latencyMs: result.latencyMs };
     const parsed = JSON.parse(result.rawText);
@@ -208,9 +124,6 @@ async function generateEscalationBrief({ orgId, accountId, userId, db = defaultS
       status: account.escalation_status, reason: account.escalation_reason || '',
       since: account.escalation_since, notes: account.escalation_notes || '',
     },
-    recent_meetings: recentMeetings,
-    open_tasks: openTasks || [],
-    stakeholders: stakeholders || [],
     tickets: {
       counts: tickets.counts,
       critical: tickets.critical.slice(0, 10),
