@@ -629,7 +629,7 @@ const SECTIONS = [
         const dir   = item.direction ? ` [${item.direction}]` : '';
         const label = `[${idx + 1}] ${fmtDate(item.occurred_at, now)} | ${item.source}${dir}`;
         const body  = trunc(item.summary || item.content || '', 500);
-        return `${label}\n${body}`;
+        return `${label}:\n${body}`;
       }).join('\n\n');
     },
   },
@@ -755,10 +755,34 @@ async function buildAccountContext({ orgId, accountId, userId, db: dbArg, option
   const text       = blocks.join('\n\n');
   const totalChars = text.length;
 
+  // Build citations from semantic_context markers that survive the final text
+  let citations   = [];
+  let citationIds = [];
+
+  const scEntry = gathered.find(g => g.name === 'semantic_context');
+  if (scEntry && scEntry.data && Array.isArray(scEntry.data.interactions)) {
+    const finalScText = sectionTexts['semantic_context'] || '';
+    scEntry.data.interactions.forEach((item, idx) => {
+      const marker = `[${idx + 1}]`;
+      if (finalScText.includes(marker)) {
+        citations.push({
+          marker,
+          id:          item.id,
+          source:      item.source,
+          occurred_at: item.occurred_at,
+          snippet:     trunc(item.summary || item.content || '', 180),
+        });
+        citationIds.push(item.id);
+      }
+    });
+  }
+
   return {
     text,
     sections: sectionMeta,
     stats: { totalChars, gatherMs },
+    citations,
+    citationIds,
   };
 }
 

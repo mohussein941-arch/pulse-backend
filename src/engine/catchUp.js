@@ -4,19 +4,18 @@ const { synthesizeHealth }    = require('./healthSynthesis');
 const { buildAccountContext } = require('./accountContext');
 const llm                     = require('../services/llm');
 
-// M4c.3 — migrated from synthesizeHealth + getContext onto buildAccountContext.
-// synthesis is still returned to callers (handoffPacket reads .narrative/.citation_ids/.citations;
-// routes return full JSON). citation_ids/citations are [] — see healthNarrative.js note.
+// M4c.3b — citations restored: semantic_context runs with the query so the assembler
+// can build the citations/citationIds arrays that match the pre-migration contract.
 async function generateCatchUp({ orgId, accountId, userId, db = defaultSupabase }) {
   const [synthesis, context] = await Promise.all([
     synthesizeHealth({ orgId, accountId, db }),
     buildAccountContext({
       orgId, accountId, userId, db,
       options: {
-        sections:      ['profile', 'workstreams', 'onboarding', 'health_trajectory', 'voice_of_customer', 'support', 'history'],
+        sections:      ['profile', 'workstreams', 'onboarding', 'health_trajectory', 'voice_of_customer', 'support', 'history', 'semantic_context'],
         query:         'Full relationship history: meetings, emails, calls, decisions, commitments, issues, blockers, and recent activity',
         semanticLimit: 10,
-        maxTotalChars: 11000,
+        maxTotalChars: 13000,
       },
     }),
   ]);
@@ -39,15 +38,16 @@ async function generateCatchUp({ orgId, accountId, userId, db = defaultSupabase 
     system:
       `You are a Customer Success expert assistant. Synthesise account context into a useful response.\n` +
       `Be factual — only use information present in the provided context. If the context is insufficient, say so clearly.\n` +
-      `Write in plain prose. Do not use any Markdown formatting — no headings, bold, italics, or bullet points.`,
+      `Write in plain prose. Do not use any Markdown formatting — no headings, bold, italics, or bullet points.\n` +
+      `Items in SEMANTIC CONTEXT are numbered. When a claim is directly supported by a numbered item, append its [n] marker.`,
     user: `Task: ${task}\n\nAccount context:\n${context.text}`,
   });
 
   return {
     narrative:    output,
-    citation_ids: [],
+    citation_ids: context.citationIds,
     trace_id:     traceId,
-    citations:    [],
+    citations:    context.citations,
     synthesis,
   };
 }
