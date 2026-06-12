@@ -233,7 +233,7 @@ router.post('/chat/:accountId', async (req, res, next) => {
       feature:   'ask_ai_chat',
       accountId: req.params.accountId,
       createdBy: req.userId,
-      system: `You are a Customer Success assistant. Answer questions about the following account based only on the data provided. If the data doesn't support a definitive answer, say so explicitly. All dates in the data are pre-computed with relative ages — no date arithmetic is needed.\n\n${safeBlock('account_data', context.text)}`,
+      system: `You are a Customer Success assistant. Answer questions about the following account based only on the data provided. If the data doesn't support a definitive answer, say so explicitly. All dates in the data are pre-computed with relative ages — no date arithmetic is needed. Respond conversationally in plain prose — no markdown headers, tables, or bullet lists. Default to 2-5 sentences; go longer only when the question genuinely requires detail.\n\n${safeBlock('account_data', context.text)}`,
       user: messages.map(m => `${m.role === 'assistant' ? 'Assistant' : 'CSM'}: ${m.content}`).join('\n\n'),
       maxTokens: 500,
     });
