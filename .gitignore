@@ -11,6 +11,9 @@ scripts/
 smoke_*.cjs
 verify_*.cjs
 
+# Dev tooling / smoke tests (not source)
+tools/
+
 # Seed generator outputs (generated artifacts, not source)
 tools/seed-generator/output/
 
